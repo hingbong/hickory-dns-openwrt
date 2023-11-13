@@ -1,17 +1,17 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=hickory-dns
-PKG_VERSION:=b0c0566
+PKG_VERSION:=d074554
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/hickory-dns/hickory-dns/tar.gz/$(PKG_VERSION)?
-PKG_HASH:=7ff9f93ba48eeeb1303a769cb39a378f6bfae2aa3dab0b76f662305ff64c089f
+PKG_HASH:=e130244275c2c5f482c0b1e6d99f7f28d10ee59648f2cbd34711e565d35f16de
 
 PKG_BUILD_DEPENDS:=rust/host
 PKG_BUILD_PARALLEL:=1
 
-RUST_PKG_FEATURES:=dns-over-https-rustls,dns-over-quic,dns-over-h3
+RUST_PKG_FEATURES:=resolver,dns-over-https-rustls,dns-over-quic,dns-over-h3
 
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk
@@ -22,11 +22,20 @@ define Package/hickory-dns
   SUBMENU:=IP Addresses and Names
   TITLE:=A plug-in DNS forwarder/splitter
   URL:=https://github.com/hickory-dns/hickory-dns
-  DEPENDS:=$(RUST_ARCH_DEPENDS) +ca-bundle
+  DEPENDS:=$(RUST_ARCH_DEPENDS)
 endef
 
 define Build/Compile
-  $(call Build/Compile/Cargo,bin)
+  $(call Build/Compile/Cargo,bin,--no-default-features)
+endef
+
+define Package/hickory-dns/install
+	$(INSTALL_DIR) $(1)/usr/bin/
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/bin/* $(1)/usr/bin/
+	$(INSTALL_DIR) $(1)/etc/init.d/
+	$(INSTALL_DIR) $(1)/etc/hickory-dns/
+	$(INSTALL_BIN) ./files/etc/init.d/hickory-dns $(1)/etc/init.d/hickory-dns
+	$(INSTALL_BIN) ./files/etc/hickory-dns/forwarder.toml $(1)/etc/hickory-dns/forwarder.toml
 endef
 
 $(eval $(call RustBinPackage,hickory-dns))

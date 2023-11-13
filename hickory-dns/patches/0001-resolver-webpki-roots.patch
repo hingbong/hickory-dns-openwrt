@@ -1,0 +1,13 @@
+diff --git a/bin/Cargo.toml b/bin/Cargo.toml
+index 30267023..a6313653 100644
+--- a/bin/Cargo.toml
++++ b/bin/Cargo.toml
+@@ -101,6 +101,7 @@ name = "hickory-dns"
+ path = "src/hickory-dns.rs"
+ 
+ [dependencies]
++hickory-resolver = { workspace = true, features = ["webpki-roots"] }
+ # clap features:
+ # - suggestion for advanced help with error in cli
+ # - derive for clap derive api
+
