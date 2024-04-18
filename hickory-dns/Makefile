@@ -1,18 +1,18 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=hickory-dns
-PKG_VERSION:=94ac564
+PKG_VERSION:=76a4b84216fa4984eafd4c4ceb5f0892ae3edbbf
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/hickory-dns/hickory-dns/tar.gz/$(PKG_VERSION)?
-PKG_HASH:=55ab8b35849c3778f86ddaf5c90c9d31733ade40d4b414f4d9020b40d4bfa6d6
+PKG_HASH:=962c0c2959ccd0be58b91a10d0ba0ec85d055449a222f7b340b3751205ca9e1f
 
 PKG_BUILD_DEPENDS:=rust/host
 PKG_BUILD_PARALLEL:=1
 
 PKG_BUILD_FLAGS:=no-lto
-RUST_PKG_FEATURES:=resolver,dns-over-https-rustls,dns-over-quic,dns-over-h3,native-certs
+RUST_PKG_FEATURES:=resolver,dns-over-https-rustls,dns-over-quic,dns-over-h3,native-certs,dnssec-ring,recursor
 
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk
