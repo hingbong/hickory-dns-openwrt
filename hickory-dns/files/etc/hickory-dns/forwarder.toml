@@ -7,5 +7,5 @@ zone_type = "Forward"
 stores = { type = "forward", name_servers = [
         { socket_addr = "[2400:3200::1]:443", protocol = "h3", trust_nx_responses = true, tls_dns_name = "dns.alidns.com" },
         { socket_addr = "[2400:3200:baba::1]:443", protocol = "h3", trust_nx_responses = true, tls_dns_name = "dns.alidns.com" },
-    ], options = { rotate = true, edns0 = true, ip_strategy = "Ipv6thenIpv4", cache_size = 0, use_hosts_file = true, num_concurrent_reqs = 4096, server_ordering_strategy = "UserProvidedOrder", authentic_data = true, shuffle_dns_servers = true }}
+    ], options = { rotate = true, edns0 = true, ip_strategy = "Ipv6thenIpv4", cache_size = 0, use_hosts_file = true, server_ordering_strategy = "UserProvidedOrder", shuffle_dns_servers = true }}
 
