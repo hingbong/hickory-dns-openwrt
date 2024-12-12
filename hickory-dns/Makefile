@@ -10,7 +10,6 @@ PKG_SOURCE_VERSION:=HEAD
 PKG_BUILD_DEPENDS:=rust/host
 PKG_BUILD_PARALLEL:=1
 
-PKG_BUILD_FLAGS:=no-lto
 RUST_PKG_FEATURES:=resolver,dns-over-https-rustls,dns-over-quic,dns-over-h3,native-certs,dnssec-ring,recursor
 
 include $(INCLUDE_DIR)/package.mk
