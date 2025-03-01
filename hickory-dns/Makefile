@@ -10,7 +10,7 @@ PKG_SOURCE_VERSION:=HEAD
 PKG_BUILD_DEPENDS:=rust/host
 PKG_BUILD_PARALLEL:=1
 
-RUST_PKG_FEATURES:=resolver,dns-over-https-rustls-aws-lc-rs,dns-over-quic-aws-lc-rs,dns-over-h3-aws-lc-rs,rustls-platform-verifier,sqlite
+RUST_PKG_FEATURES:=resolver,tls-aws-lc-rs,https-aws-lc-rs,quic-aws-lc-rs,h3-aws-lc-rs,rustls-platform-verifier,sqlite
 
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk
