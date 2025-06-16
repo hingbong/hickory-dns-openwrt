@@ -1,0 +1,28 @@
+name: Update hickory-dns to Latest Commit
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update-hickory-dns:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Fetch latest commit SHA from hickory-dns/hickory-dns
+        id: fetch-sha
+        run: |
+          LATEST_SHA=$(git ls-remote https://github.com/hickory-dns/hickory-dns.git HEAD | awk '{print $1}')
+          echo "LATEST_SHA=$LATEST_SHA" >> $GITHUB_ENV
+
+      - name: Update Makefile PKG_SOURCE_VERSION
+        run: |
+          sed -i "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ env.LATEST_SHA }}/" hickory-dns/Makefile
+
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update PKG_SOURCE_VERSION to latest hickory-dns commit"
+          file_pattern: hickory-dns/Makefile
+          branch: ${{ github.ref_name }}
