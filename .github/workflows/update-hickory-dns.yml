@@ -10,19 +10,53 @@ jobs:
       - name: Checkout this repo
         uses: actions/checkout@v4
 
-      - name: Fetch latest commit SHA from hickory-dns/hickory-dns
-        id: fetch-sha
+      - name: Get latest commit from hickory-dns
+        id: latest-commit
         run: |
-          LATEST_SHA=$(git ls-remote https://github.com/hickory-dns/hickory-dns.git HEAD | awk '{print $1}')
-          echo "LATEST_SHA=$LATEST_SHA" >> $GITHUB_ENV
+          # Get the latest commit SHA from hickory-dns main branch
+          LATEST_COMMIT=$(curl -s "https://api.github.com/repos/hickory-dns/hickory-dns/commits/main" | jq -r .sha)
+          # Get current commit from Makefile
+          CURRENT_COMMIT=$(grep "^HICKORY_COMMIT:=" hickory-dns/Makefile | cut -d'=' -f2)
+          
+          echo "LATEST_COMMIT=$LATEST_COMMIT" >> $GITHUB_ENV
+          echo "CURRENT_COMMIT=$CURRENT_COMMIT" >> $GITHUB_ENV
+          
+          if [ "$LATEST_COMMIT" = "$CURRENT_COMMIT" ]; then
+            echo "No update needed. Current commit is already the latest."
+            exit 1
+          fi
 
-      - name: Update Makefile PKG_SOURCE_VERSION
+      - name: Generate dynamic version
         run: |
-          sed -i "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${{ env.LATEST_SHA }}/" hickory-dns/Makefile
+          # Generate version based on current date
+          PKG_VERSION=$(date -u +%Y.%m.%d)
+          echo "PKG_VERSION=$PKG_VERSION" >> $GITHUB_ENV
+
+      - name: Download source tarball and calculate sha256 hash
+        run: |
+          URL="https://codeload.github.com/hickory-dns/hickory-dns/tar.gz/${LATEST_COMMIT}"
+          FILE="hickory-dns-${LATEST_COMMIT}.tar.gz"
+          curl -L "$URL" -o "$FILE"
+          HASH=$(sha256sum "$FILE" | cut -d' ' -f1)
+          echo "PKG_HASH=$HASH" >> $GITHUB_ENV
+
+      - name: Update Makefile for version, commit, hash, and tarball
+        run: |
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${PKG_VERSION}/" hickory-dns/Makefile
+          sed -i "s/^HICKORY_COMMIT:=.*/HICKORY_COMMIT:=${LATEST_COMMIT}/" hickory-dns/Makefile
+          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${PKG_HASH}/" hickory-dns/Makefile
+          sed -i "s|^PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://codeload.github.com/hickory-dns/hickory-dns/tar.gz/${LATEST_COMMIT}?|" hickory-dns/Makefile
+          sed -i "s|^PKG_BUILD_DIR:=.*|PKG_BUILD_DIR:=\$(BUILD_DIR)/\$(PKG_NAME)-${LATEST_COMMIT}|" hickory-dns/Makefile
+
+      - name: Ensure install step writes commit file
+        run: |
+          # Only add echo line if not present
+          grep -q 'echo "\$(HICKORY_COMMIT)" > \$(1)/etc/hickory/commit' hickory-dns/Makefile || \
+          sed -i '/^define Package\/hickory-dns\/install/a\\techo "$(HICKORY_COMMIT)" > $(1)/etc/hickory/commit' hickory-dns/Makefile
 
       - name: Commit and push changes
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: update PKG_SOURCE_VERSION to latest hickory-dns commit"
+          commit_message: "chore: update hickory-dns to ${{ env.PKG_VERSION }} (${{ env.LATEST_COMMIT }})"
           file_pattern: hickory-dns/Makefile
           branch: ${{ github.ref_name }}
