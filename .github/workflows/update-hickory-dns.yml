@@ -20,11 +20,6 @@ jobs:
           
           echo "LATEST_COMMIT=$LATEST_COMMIT" >> $GITHUB_ENV
           echo "CURRENT_COMMIT=$CURRENT_COMMIT" >> $GITHUB_ENV
-          
-          if [ "$LATEST_COMMIT" = "$CURRENT_COMMIT" ]; then
-            echo "No update needed. Current commit is already the latest."
-            exit 1
-          fi
 
       - name: Generate dynamic version
         run: |
@@ -51,8 +46,8 @@ jobs:
       - name: Ensure install step writes commit file
         run: |
           # Only add echo line if not present
-          grep -q 'echo "\$(HICKORY_COMMIT)" > \$(1)/etc/hickory/commit' hickory-dns/Makefile || \
-          sed -i '/^define Package\/hickory-dns\/install/a\\techo "$(HICKORY_COMMIT)" > $(1)/etc/hickory/commit' hickory-dns/Makefile
+          grep -q 'echo "\$(HICKORY_COMMIT)" > \$(1)/etc/hickory-dns/commit' hickory-dns/Makefile || \
+          sed -i '/^define Package\/hickory-dns\/install/a\\techo "$(HICKORY_COMMIT)" > $(1)/etc/hickory-dns/commit' hickory-dns/Makefile
 
       - name: Commit and push changes
         uses: stefanzweifel/git-auto-commit-action@v5
