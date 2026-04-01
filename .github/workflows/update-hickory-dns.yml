@@ -24,7 +24,7 @@ jobs:
       - name: Generate dynamic version
         run: |
           # Generate version based on current date
-          PKG_VERSION=$(date -u +%Y.%m.%d)
+          PKG_VERSION=$(date -u +%Y.%m.%d)-${LATEST_COMMIT:0:7}
           echo "PKG_VERSION=$PKG_VERSION" >> $GITHUB_ENV
 
       - name: Download source tarball and calculate sha256 hash
