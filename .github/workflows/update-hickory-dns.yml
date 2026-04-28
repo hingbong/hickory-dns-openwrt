@@ -43,6 +43,15 @@ jobs:
           sed -i "s|^PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://codeload.github.com/hickory-dns/hickory-dns/tar.gz/${LATEST_COMMIT}?|" hickory-dns/Makefile
           sed -i "s|^PKG_BUILD_DIR:=.*|PKG_BUILD_DIR:=\$(BUILD_DIR)/\$(PKG_NAME)-${LATEST_COMMIT}|" hickory-dns/Makefile
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Update ipv6-neigh hickory-proto dependency
+        run: |
+          sed -i "s|hickory-proto = { git = \"https://github.com/hickory-dns/hickory-dns.git\", rev = \"[a-f0-9]*\" }|hickory-proto = { git = \"https://github.com/hickory-dns/hickory-dns.git\", rev = \"${LATEST_COMMIT}\" }|" ipv6-neigh/Cargo.toml
+          # Regenerate Cargo.lock with the new dependency
+          cd ipv6-neigh && cargo update -p hickory-proto 2>/dev/null || true
+
       - name: Ensure install step writes commit file
         run: |
           # Only add echo line if not present
@@ -53,5 +62,5 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore: update hickory-dns to ${{ env.PKG_VERSION }} (${{ env.LATEST_COMMIT }})"
-          file_pattern: hickory-dns/Makefile
+          file_pattern: hickory-dns/Makefile ipv6-neigh/Cargo.toml ipv6-neigh/Cargo.lock
           branch: ${{ github.ref_name }}

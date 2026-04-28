@@ -1,0 +1,52 @@
+name: Build ipv6-neigh (aarch64)
+
+on:
+  push:
+    paths:
+      - "ipv6-neigh/**"
+  pull_request:
+    paths:
+      - "ipv6-neigh/**"
+  workflow_dispatch:
+
+jobs:
+  build-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Install cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
+
+      - name: Configure cargo for cross-compilation
+        run: |
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-musl]
+          linker = "aarch64-linux-gnu-gcc"
+          rustflags = ["-C", "target-feature=+crt-static"]
+          EOF
+
+      - name: Build ipv6-neigh for aarch64
+        working-directory: ipv6-neigh
+        run: |
+          cargo build --release --target aarch64-unknown-linux-musl
+
+      - name: Check binary
+        run: |
+          file ipv6-neigh/target/aarch64-unknown-linux-musl/release/ip-neigh
+          ls -lh ipv6-neigh/target/aarch64-unknown-linux-musl/release/ip-neigh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipv6-neigh-aarch64
+          path: ipv6-neigh/target/aarch64-unknown-linux-musl/release/ip-neigh
