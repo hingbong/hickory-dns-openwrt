@@ -1,0 +1,59 @@
+name: Build hickory-dns (aarch64)
+
+on:
+  push:
+    paths:
+      - "hickory-dns/**"
+  pull_request:
+    paths:
+      - "hickory-dns/**"
+  workflow_dispatch:
+
+jobs:
+  build-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross
+        run: |
+          curl -fsSL https://github.com/cross-rs/cross/releases/latest/download/cross-x86_64-unknown-linux-gnu.tar.gz \
+            | sudo tar xz -C /usr/local/bin
+
+      - name: Extract hickory-dns commit from Makefile
+        id: hickory
+        run: |
+          commit=$(grep '^HICKORY_COMMIT:=' hickory-dns/Makefile | cut -d= -f2)
+          features=$(grep '^RUST_PKG_FEATURES:=' hickory-dns/Makefile | cut -d= -f2)
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "features=$features" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout hickory-dns source
+        uses: actions/checkout@v4
+        with:
+          repository: hickory-dns/hickory-dns
+          ref: ${{ steps.hickory.outputs.commit }}
+          path: hickory-dns-src
+
+      - name: Build hickory-dns for aarch64
+        working-directory: hickory-dns-src
+        run: |
+          cross build --release --target aarch64-unknown-linux-musl \
+            --bin hickory-dns \
+            --features "${{ steps.hickory.outputs.features }}" \
+            --no-default-features
+
+      - name: Check binary
+        run: |
+          file hickory-dns-src/target/aarch64-unknown-linux-musl/release/hickory-dns
+          ls -lh hickory-dns-src/target/aarch64-unknown-linux-musl/release/hickory-dns
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hickory-dns-aarch64
+          path: hickory-dns-src/target/aarch64-unknown-linux-musl/release/hickory-dns

@@ -18,27 +18,16 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-musl
 
-      - name: Install cross-compilation tools
+      - name: Install cross
         run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
-
-      - name: Configure cargo for cross-compilation
-        run: |
-          mkdir -p ~/.cargo
-          cat >> ~/.cargo/config.toml <<'EOF'
-          [target.aarch64-unknown-linux-musl]
-          linker = "aarch64-linux-gnu-gcc"
-          rustflags = ["-C", "target-feature=+crt-static"]
-          EOF
+          curl -fsSL https://github.com/cross-rs/cross/releases/latest/download/cross-x86_64-unknown-linux-gnu.tar.gz \
+            | sudo tar xz -C /usr/local/bin
 
       - name: Build ipv6-neigh for aarch64
         working-directory: ipv6-neigh
         run: |
-          cargo build --release --target aarch64-unknown-linux-musl
+          cross build --release --target aarch64-unknown-linux-musl
 
       - name: Check binary
         run: |
