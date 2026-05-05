@@ -28,6 +28,13 @@ define Package/ipv6-neigh/description
   DHCP leases (ubus).
 endef
 
+define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)/src
+	$(CP) $(CURDIR)/src/. $(PKG_BUILD_DIR)/src/
+	$(CP) $(CURDIR)/Cargo.toml $(PKG_BUILD_DIR)/
+	$(CP) $(CURDIR)/Cargo.lock $(PKG_BUILD_DIR)/
+endef
+
 define Build/Compile
 	+$(CARGO_PKG_VARS) \
 	cargo build -v --profile $(CARGO_PKG_PROFILE) \
