@@ -1,12 +1,6 @@
 name: Build hickory-dns (aarch64)
 
 on:
-  push:
-    paths:
-      - "hickory-dns/**"
-  pull_request:
-    paths:
-      - "hickory-dns/**"
   workflow_dispatch:
 
 jobs:

@@ -1,12 +1,6 @@
 name: Build ipv6-neigh (aarch64)
 
 on:
-  push:
-    paths:
-      - "ipv6-neigh/**"
-  pull_request:
-    paths:
-      - "ipv6-neigh/**"
   workflow_dispatch:
 
 jobs:
