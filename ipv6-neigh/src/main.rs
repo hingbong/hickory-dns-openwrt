@@ -196,6 +196,9 @@ async fn main() -> Result<(), ()> {
 
     let updater = db::DnsUpdater::new(args.dns_server, zone, signer);
 
+    // Wait for the DNS server to become available before sending any updates.
+    wait_for_dns_server(args.dns_server).await;
+
     let (connection, handle, _) = new_connection().unwrap();
     tokio::spawn(connection);
 
@@ -519,6 +522,24 @@ async fn register_router_addresses(
                         Err(e) => warn!("failed to register router A {} for {}: {}", addr, hostname, e),
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Block until a TCP connection to `addr` succeeds, retrying every 2 seconds.
+/// This ensures the DNS server is ready before we attempt any dynamic updates.
+async fn wait_for_dns_server(addr: StdSocketAddr) {
+    use tokio::net::TcpStream;
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(_) => {
+                info!("DNS server at {} is reachable, proceeding", addr);
+                return;
+            }
+            Err(e) => {
+                warn!("DNS server at {} not ready ({}), retrying in 2s...", addr, e);
+                time::sleep(Duration::from_secs(2)).await;
             }
         }
     }
