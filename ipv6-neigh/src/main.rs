@@ -178,6 +178,9 @@ async fn main() -> Result<(), ()> {
                 .parse()
                 .expect("invalid log level (use: error, warn, info, debug, trace)"),
         )
+        // Suppress spurious warnings from netlink_packet_route when the kernel
+        // provides more NLA data than the crate version expects (newer kernel).
+        .filter_module("netlink_packet_route", log::LevelFilter::Error)
         .format_timestamp_secs()
         .init();
 
