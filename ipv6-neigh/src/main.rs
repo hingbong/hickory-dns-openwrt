@@ -7,7 +7,7 @@ use futures::stream::TryStreamExt;
 use log::{debug, error, info, warn};
 use netlink_packet_core::NetlinkPayload;
 use netlink_packet_route::RouteNetlinkMessage;
-use netlink_packet_route::address::{AddressAttribute, AddressMessage};
+use netlink_packet_route::address::{AddressAttribute, AddressFlags, AddressHeaderFlags, AddressMessage};
 use netlink_packet_route::neighbour::NeighbourMessage;
 use netlink_packet_route::neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourState};
 use netlink_packet_route::route::RouteType;
@@ -699,16 +699,14 @@ async fn dump_neighbours(handle: Handle, private_subnet_v4: bool, private_subnet
     Ok(vec)
 }
 
-const IFA_F_DEPRECATED: u32 = 0x20;
-
 /// Check whether an address message is deprecated (preferred lifetime expired).
 fn is_addr_deprecated(msg: &AddressMessage) -> bool {
-    if (msg.header.flags as u32) & IFA_F_DEPRECATED != 0 {
+    if msg.header.flags.contains(AddressHeaderFlags::Deprecated) {
         return true;
     }
     for attr in &msg.attributes {
         match attr {
-            AddressAttribute::Flags(f) if f & IFA_F_DEPRECATED != 0 => return true,
+            AddressAttribute::Flags(f) if f.contains(AddressFlags::Deprecated) => return true,
             AddressAttribute::CacheInfo(ci) if ci.ifa_preferred == 0 => return true,
             _ => {}
         }
