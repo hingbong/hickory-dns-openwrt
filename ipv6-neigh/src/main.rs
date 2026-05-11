@@ -40,9 +40,9 @@ struct Cli {
     /// Restrict IPv4 neighbours to private subnets only (10/8, 172.16/12, 192.168/16, 127/8)
     #[clap(long)]
     private_subnet_v4: bool,
-    /// Restrict IPv6 neighbours to ULA (fc00::/7) only; without this flag GUA is also included
+    /// Also publish GUA (Global Unicast Address) AAAA records; by default only ULA (fc00::/7) is published
     #[clap(long)]
-    private_subnet_v6: bool,
+    publish_gua: bool,
     /// hickory-dns server address for DNS updates (e.g. "[::1]:5335")
     #[clap(short, long, default_value = "[::1]:5335")]
     dns_server: StdSocketAddr,
@@ -199,7 +199,7 @@ async fn main() -> Result<(), ()> {
         .init();
 
     let private_subnet_v4 = args.private_subnet_v4;
-    let private_subnet_v6 = args.private_subnet_v6;
+    let private_subnet_v6 = !args.publish_gua;
     let zone = Name::from_ascii(&args.zone).expect("invalid zone name");
 
     let key_data = std::fs::read(&args.key_file)
