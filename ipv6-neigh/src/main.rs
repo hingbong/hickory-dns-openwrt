@@ -607,7 +607,7 @@ fn send_icmpv6_echo(addr: Ipv6Addr, ifindex: u32) -> std::io::Result<()> {
     // Bind outgoing packet to the specific interface via IPV6_UNICAST_IF so the
     // kernel NUD state machine updates the correct neighbour entry.
     if ifindex != 0 {
-        unsafe {
+        let ret = unsafe {
             let idx = ifindex as libc::c_int;
             libc::setsockopt(
                 socket.as_raw_fd(),
@@ -615,13 +615,16 @@ fn send_icmpv6_echo(addr: Ipv6Addr, ifindex: u32) -> std::io::Result<()> {
                 libc::IPV6_UNICAST_IF,
                 &idx as *const libc::c_int as *const libc::c_void,
                 std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            );
+            )
+        };
+        if ret != 0 {
+            return Err(std::io::Error::last_os_error());
         }
     }
     // ICMPv6 Echo Request: type=128, code=0, checksum=0 (kernel computes), id=0, seq=1
     let packet: [u8; 8] = [128, 0, 0, 0, 0, 0, 0, 1];
     let dest = SockAddr::from(std::net::SocketAddrV6::new(addr, 0, 0, 0));
-    let _ = socket.send_to(&packet, &dest);
+    socket.send_to(&packet, &dest)?;
     Ok(())
 }
 
@@ -630,7 +633,7 @@ fn send_icmpv4_echo(addr: Ipv4Addr, ifindex: u32) -> std::io::Result<()> {
     socket.set_nonblocking(true)?;
     // Bind outgoing packet to the specific interface via IP_UNICAST_IF.
     if ifindex != 0 {
-        unsafe {
+        let ret = unsafe {
             let idx = ifindex as libc::c_int;
             libc::setsockopt(
                 socket.as_raw_fd(),
@@ -638,14 +641,17 @@ fn send_icmpv4_echo(addr: Ipv4Addr, ifindex: u32) -> std::io::Result<()> {
                 libc::IP_UNICAST_IF,
                 &idx as *const libc::c_int as *const libc::c_void,
                 std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            );
+            )
+        };
+        if ret != 0 {
+            return Err(std::io::Error::last_os_error());
         }
     }
     // ICMPv4 Echo Request: type=8, code=0, checksum (simple for 8 bytes), id=0, seq=1
     // Checksum for [08,00,00,00,00,00,00,01]: ~(0x0800 + 0x0001) = 0xf7fe
     let packet: [u8; 8] = [8, 0, 0xf7, 0xfe, 0, 0, 0, 1];
     let dest = SockAddr::from(std::net::SocketAddrV4::new(addr, 0));
-    let _ = socket.send_to(&packet, &dest);
+    socket.send_to(&packet, &dest)?;
     Ok(())
 }
 
