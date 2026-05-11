@@ -364,7 +364,8 @@ async fn main() -> Result<(), ()> {
     };
     probe_timer.tick().await; // consume the immediate first tick
 
-    let mut event_count: u64 = 0;
+    let mut lease_refresh_timer = time::interval(Duration::from_secs(60));
+    lease_refresh_timer.tick().await; // consume the immediate first tick
 
     loop {
         tokio::select! {
@@ -372,15 +373,6 @@ async fn main() -> Result<(), ()> {
                 let Some((message, _)) = msg_opt else {
                     break;
                 };
-
-                // Refresh leases periodically (every 50 events)
-                event_count += 1;
-                if event_count % 50 == 0 {
-                    if let Ok(new_leases) = op::get_lease() {
-                        leases = new_leases;
-                        debug!("refreshed {} DHCP leases", leases.len());
-                    }
-                }
 
                 let payload = message.payload;
                 if let NetlinkPayload::InnerMessage(msg) = payload {
@@ -479,6 +471,12 @@ async fn main() -> Result<(), ()> {
                     private_subnet_v6,
                 )
                 .await;
+            }
+            _ = lease_refresh_timer.tick() => {
+                if let Ok(new_leases) = op::get_lease() {
+                    leases = new_leases;
+                    debug!("refreshed {} DHCP leases", leases.len());
+                }
             }
         }
     }
