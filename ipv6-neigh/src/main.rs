@@ -126,6 +126,12 @@ fn ipv6_in_prefix(addr: Ipv6Addr, prefix: &LanPrefix) -> bool {
     (u128::from(addr) & mask) == (u128::from(prefix.addr) & mask)
 }
 
+/// Returns true if `addr` is within any active LAN prefix, or if the prefix list is empty
+/// (in which case prefix-based filtering is disabled).
+fn ipv6_passes_active_prefix(addr: Ipv6Addr, active_prefixes: &[LanPrefix]) -> bool {
+    active_prefixes.is_empty() || active_prefixes.iter().any(|p| ipv6_in_prefix(addr, p))
+}
+
 async fn process_new_neigh(neigh: &Neigh, updater: &db::DnsUpdater, leases: &HashMap<String, String>) -> bool {
     let Some(hostname) = leases.get(&neigh.mac) else {
         debug!("no lease for mac {}, skipping DNS update", neigh.mac);
@@ -365,6 +371,16 @@ async fn main() -> Result<(), ()> {
                                 continue;
                             }
                             let key = (neigh.mac.clone(), inet_to_string(&neigh.inet));
+                            // Drop IPv6 events for addresses not in any active LAN prefix.
+                            if let NeighbourAddress::Inet6(addr) = &neigh.inet {
+                                if !ipv6_passes_active_prefix(*addr, &active_prefixes) {
+                                    debug!("event: skipping {} — not in any active LAN prefix", addr);
+                                    if registered.remove(&key).is_some() {
+                                        process_del_neigh(&neigh, &updater, &leases).await;
+                                    }
+                                    continue;
+                                }
+                            }
 
                             if is_failed_state(neigh.state) {
                                 // Neighbour confirmed unreachable — remove DNS record
