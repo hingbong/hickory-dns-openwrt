@@ -387,10 +387,12 @@ async fn main() -> Result<(), ()> {
                                     }
                                 }
                             } else if matches!(neigh.state, NeighbourState::Stale | NeighbourState::Delay | NeighbourState::Probe) {
-                                // Uncertain state: keep existing registrations alive but do
-                                // not create new DNS records without REACHABLE confirmation.
-                                if registered.contains_key(&key) {
-                                    registered.insert(key, (Instant::now(), neigh.ifindex));
+                                // Uncertain state: update ifindex only so the next probe uses
+                                // the right interface, but do NOT refresh last_confirmed —
+                                // STALE/DELAY/PROBE is not confirmed reachable and refreshing
+                                // the timestamp would suppress the periodic probe.
+                                if let Some((_, old_ifindex)) = registered.get_mut(&key) {
+                                    *old_ifindex = neigh.ifindex;
                                 }
                             }
                         }
