@@ -522,14 +522,25 @@ async fn reconcile_dns(
         registered.keys().map(|(_, ip)| ip.as_str()).collect();
 
     // --- DNS orphans (in DNS but not in registered) ---
-    // Probe with ifindex=0 so the kernel routes via the default LAN route.
-    // If the host is alive the resulting REACHABLE event will re-populate `registered`.
-    // If gone, the record's TTL (60 s) will expire and it won't be renewed.
+    // Delete the orphan immediately — DNS TTL only controls resolver caches, not
+    // authoritative record lifetime, so records do NOT auto-expire.
+    // After deletion we probe the address: if the device is still alive the kernel
+    // will emit a REACHABLE NewNeighbour event which re-registers it in DNS.
     for (ip_str, hostname) in &dns_ips {
         if registered_ips.contains(ip_str.as_str()) {
             continue;
         }
-        info!("reconcile: DNS orphan {} -> {}, probing", hostname, ip_str);
+        info!("reconcile: DNS orphan {} -> {}, deleting and probing", hostname, ip_str);
+        let del_result = match ip_str.parse::<IpAddr>() {
+            Ok(IpAddr::V6(addr)) => updater.delete_aaaa(hostname, addr).await,
+            Ok(IpAddr::V4(addr)) => updater.delete_a(hostname, addr).await,
+            _ => continue,
+        };
+        match del_result {
+            Ok(()) => info!("reconcile: deleted orphan DNS {} -> {}", hostname, ip_str),
+            Err(e) => warn!("reconcile: failed to delete orphan {} {}: {}", hostname, ip_str, e),
+        }
+        // Probe so alive devices trigger a REACHABLE event and re-register.
         match ip_str.parse::<IpAddr>() {
             Ok(IpAddr::V6(addr)) => {
                 if let Err(e) = send_icmpv6_echo(addr, 0) {
@@ -537,7 +548,9 @@ async fn reconcile_dns(
                 }
             }
             Ok(IpAddr::V4(addr)) => {
-                let _ = send_icmpv4_echo(addr, 0);
+                if let Err(e) = send_icmpv4_echo(addr, 0) {
+                    debug!("reconcile: probe failed for {}: {}", addr, e);
+                }
             }
             _ => {}
         }
