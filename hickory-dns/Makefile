@@ -59,7 +59,6 @@ define Package/hickory-dns/install
 	$(INSTALL_DATA) ./files/etc/hickory-dns/255.zone $(1)/etc/hickory-dns/255.zone
 	$(INSTALL_DATA) ./files/etc/hickory-dns/0.zone $(1)/etc/hickory-dns/0.zone
 	echo "$(HICKORY_COMMIT)" > $(1)/etc/hickory-dns/commit
-	chown -R nobody:nogroup $(1)/etc/hickory-dns/
 endef
 
 $(eval $(call RustBinPackage,hickory-dns))
