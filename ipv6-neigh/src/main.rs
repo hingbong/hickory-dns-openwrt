@@ -13,7 +13,7 @@ use netlink_packet_route::neighbour::{NeighbourAddress, NeighbourAttribute, Neig
 use netlink_packet_route::route::RouteType;
 use rtnetlink::{Error, Handle, new_connection};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use std::os::unix::io::AsRawFd;
+use std::num::NonZeroU32;
 use tokio::time::{self, Duration};
 
 use clap::Parser;
@@ -691,9 +691,13 @@ async fn main() -> Result<(), ()> {
                 prune_gua_keepalive(&mut gua_keepalive, keepalive_gua_interval, keepalive_gua_per_host);
             }
             _ = lease_refresh_timer.tick() => {
-                if let Ok(new_leases) = op::get_lease() {
-                    leases = new_leases;
-                    debug!("refreshed {} DHCP leases", leases.len());
+                match tokio::task::spawn_blocking(|| op::get_lease().map_err(|e| e.to_string())).await {
+                    Ok(Ok(new_leases)) => {
+                        leases = new_leases;
+                        debug!("refreshed {} DHCP leases", leases.len());
+                    }
+                    Ok(Err(e)) => warn!("failed to refresh DHCP leases from ubus: {}", e),
+                    Err(e) => warn!("DHCP lease refresh task panicked: {}", e),
                 }
             }
         }
@@ -901,26 +905,35 @@ fn prune_gua_keepalive(
     });
 }
 
+fn set_ipv6_unicast_if(socket: &Socket, ifindex: u32) -> std::io::Result<()> {
+    socket.bind_device_by_index_v6(NonZeroU32::new(ifindex))
+}
+
+fn set_ip_unicast_if(socket: &Socket, ifindex: u32) -> std::io::Result<()> {
+    socket.bind_device_by_index_v4(NonZeroU32::new(ifindex))
+}
+
+fn compute_icmpv4_checksum(packet: &mut [u8]) {
+    packet[2] = 0;
+    packet[3] = 0;
+    let mut sum = 0u32;
+    for chunk in packet.chunks(2) {
+        let word = u16::from_be_bytes([chunk[0], *chunk.get(1).unwrap_or(&0)]);
+        sum = sum.wrapping_add(word as u32);
+    }
+    while (sum >> 16) > 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    let checksum = !(sum as u16);
+    packet[2..4].copy_from_slice(&checksum.to_be_bytes());
+}
+
 fn send_icmpv6_echo(addr: Ipv6Addr, ifindex: u32) -> std::io::Result<()> {
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::ICMPV6))?;
     socket.set_nonblocking(true)?;
     // Bind outgoing packet to the specific interface via IPV6_UNICAST_IF so the
     // kernel NUD state machine updates the correct neighbour entry.
-    if ifindex != 0 {
-        let ret = unsafe {
-            let idx = ifindex as libc::c_int;
-            libc::setsockopt(
-                socket.as_raw_fd(),
-                libc::IPPROTO_IPV6,
-                libc::IPV6_UNICAST_IF,
-                &idx as *const libc::c_int as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            )
-        };
-        if ret != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
+    set_ipv6_unicast_if(&socket, ifindex)?;
     // ICMPv6 Echo Request: type=128, code=0, checksum=0 (kernel computes), id=0, seq=1
     let packet: [u8; 8] = [128, 0, 0, 0, 0, 0, 0, 1];
     let dest = SockAddr::from(std::net::SocketAddrV6::new(addr, 0, 0, 0));
@@ -932,24 +945,10 @@ fn send_icmpv4_echo(addr: Ipv4Addr, ifindex: u32) -> std::io::Result<()> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::ICMPV4))?;
     socket.set_nonblocking(true)?;
     // Bind outgoing packet to the specific interface via IP_UNICAST_IF.
-    if ifindex != 0 {
-        let ret = unsafe {
-            let idx = ifindex as libc::c_int;
-            libc::setsockopt(
-                socket.as_raw_fd(),
-                libc::IPPROTO_IP,
-                libc::IP_UNICAST_IF,
-                &idx as *const libc::c_int as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            )
-        };
-        if ret != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
-    // ICMPv4 Echo Request: type=8, code=0, checksum (simple for 8 bytes), id=0, seq=1
-    // Checksum for [08,00,00,00,00,00,00,01]: ~(0x0800 + 0x0001) = 0xf7fe
-    let packet: [u8; 8] = [8, 0, 0xf7, 0xfe, 0, 0, 0, 1];
+    set_ip_unicast_if(&socket, ifindex)?;
+    // ICMPv4 Echo Request: type=8, code=0, checksum (computed), id=0, seq=1
+    let mut packet: [u8; 8] = [8, 0, 0, 0, 0, 0, 0, 1];
+    compute_icmpv4_checksum(&mut packet);
     let dest = SockAddr::from(std::net::SocketAddrV4::new(addr, 0));
     socket.send_to(&packet, &dest)?;
     Ok(())
@@ -999,7 +998,7 @@ fn parse_neighbour_message(neigh: NeighbourMessage, private_subnet_v4: bool) -> 
     let kind = neigh.header.kind;
     let ifindex = neigh.header.ifindex;
     let mac = neigh.attributes.iter().find_map(|attr| match attr {
-        NeighbourAttribute::LinkLocalAddress(mac) => Some(mac.to_owned()),
+        NeighbourAttribute::LinkLayerAddress(mac) => Some(mac.to_owned()),
         _ => None,
     })?;
     let mac_str = format_mac(mac);
