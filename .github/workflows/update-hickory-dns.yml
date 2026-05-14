@@ -48,7 +48,7 @@ jobs:
 
       - name: Update ipv6-neigh hickory-proto dependency
         run: |
-          sed -i "s|hickory-proto = { git = \"https://github.com/hickory-dns/hickory-dns.git\", rev = \"[a-f0-9]*\" }|hickory-proto = { git = \"https://github.com/hickory-dns/hickory-dns.git\", rev = \"${LATEST_COMMIT}\" }|" ipv6-neigh/Cargo.toml
+          sed -i "s|rev = \"[a-f0-9]*\"|rev = \"${LATEST_COMMIT}\"|" ipv6-neigh/Cargo.toml
           # Regenerate Cargo.lock with the new dependency
           cd ipv6-neigh && cargo update -p hickory-proto 2>/dev/null || true
 
