@@ -44,12 +44,12 @@ define Build/Compile
 		$(if $(filter --jobserver%,$(PKG_JOBS)),,-j1) \
 		$(CARGO_PKG_ARGS)
 	+$(INSTALL_DIR) $(PKG_INSTALL_DIR)/bin/
-	+$(INSTALL_BIN) $(PKG_BUILD_DIR)/target/$(RUSTC_TARGET_ARCH)/$(CARGO_PKG_PROFILE)/ip-neigh $(PKG_INSTALL_DIR)/bin/
+	+$(INSTALL_BIN) $(PKG_BUILD_DIR)/target/$(RUSTC_TARGET_ARCH)/$(CARGO_PKG_PROFILE)/ipv6-neigh $(PKG_INSTALL_DIR)/bin/
 endef
 
 define Package/ipv6-neigh/install
 	$(INSTALL_DIR) $(1)/usr/bin/
-	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/bin/ip-neigh $(1)/usr/bin/ipv6-neigh
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/bin/ipv6-neigh $(1)/usr/bin/ipv6-neigh
 endef
 
 $(eval $(call RustBinPackage,ipv6-neigh))

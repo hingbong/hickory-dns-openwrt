@@ -25,11 +25,11 @@ jobs:
 
       - name: Check binary
         run: |
-          file ipv6-neigh/target/aarch64-unknown-linux-musl/release/ip-neigh
-          ls -lh ipv6-neigh/target/aarch64-unknown-linux-musl/release/ip-neigh
+          file ipv6-neigh/target/aarch64-unknown-linux-musl/release/ipv6-neigh
+          ls -lh ipv6-neigh/target/aarch64-unknown-linux-musl/release/ipv6-neigh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ipv6-neigh-aarch64
-          path: ipv6-neigh/target/aarch64-unknown-linux-musl/release/ip-neigh
+          path: ipv6-neigh/target/aarch64-unknown-linux-musl/release/ipv6-neigh
