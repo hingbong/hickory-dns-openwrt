@@ -35,6 +35,10 @@ jobs:
 
       - name: Build hickory-dns for aarch64
         working-directory: hickory-dns-src
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "3"
+          CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: "false"
+          RUSTFLAGS: "-C target-cpu=cortex-a53 -C target-feature=+crc,+crypto"
         run: |
           cross build --release --target aarch64-unknown-linux-musl \
             --bin hickory-dns \
