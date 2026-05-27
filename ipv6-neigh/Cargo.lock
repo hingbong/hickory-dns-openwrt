@@ -534,7 +534,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ip-neigh"
+name = "ipv6-neigh"
 version = "0.1.0"
 dependencies = [
  "clap",
