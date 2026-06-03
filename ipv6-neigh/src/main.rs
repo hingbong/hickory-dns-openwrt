@@ -380,7 +380,7 @@ async fn main() -> Result<(), ()> {
                         } else if matches!(neigh.state, NeighbourState::Stale | NeighbourState::Delay | NeighbourState::Probe) {
                             match prober.send_icmpv6_echo(*addr, neigh.ifindex) {
                                 Ok(()) => debug!("init dump: probing stale GUA {}", addr),
-                                Err(e) => debug!("init GUA probe failed for {}: {}", addr, e),
+                                Err(e) => warn!("init GUA probe failed for {}: {}", addr, e),
                             }
                         }
                     }
@@ -407,12 +407,12 @@ async fn main() -> Result<(), ()> {
                         NeighbourAddress::Inet6(addr) => {
                             match prober.send_icmpv6_echo(*addr, neigh.ifindex) {
                                 Ok(()) => debug!("init dump: probing stale neighbour {}", addr),
-                                Err(e) => debug!("init probe failed for {}: {}", addr, e),
+                                Err(e) => warn!("init probe failed for {}: {}", addr, e),
                             }
                         }
                         NeighbourAddress::Inet(addr) => {
                             if let Err(e) = prober.send_icmpv4_echo(*addr, neigh.ifindex) {
-                                debug!("init probe failed for {}: {}", addr, e);
+                                warn!("init probe failed for {}: {}", addr, e);
                             }
                         }
                         _ => {}
@@ -526,10 +526,10 @@ async fn main() -> Result<(), ()> {
                                             registered.insert(key, entry);
                                         }
                                     } else {
-                                        debug!("Neighbour failed: not in registered map, key={:?}", key);
+                                        warn!("Neighbour failed: not in registered map, key={:?}", key);
                                     }
                                 } else {
-                                    debug!("Neighbour failed: no registered key for ip={}", ip_str);
+                                    warn!("Neighbour failed: no registered key for ip={}", ip_str);
                                 }
                             } else if neigh.state == NeighbourState::Reachable {
                                 if let Some(hostname) = leases.get(&neigh.mac) {
@@ -628,7 +628,7 @@ async fn main() -> Result<(), ()> {
                                 });
                             if let Some(key) = key_opt {
                                 if let Some(entry) = registered.remove(&key) {
-                                    debug!("reconcile neigh: kernel FAILED {} -> {:?}", entry.hostname, neigh.inet);
+                                    info!("reconcile neigh: kernel FAILED {} -> {:?}", entry.hostname, neigh.inet);
                                     if !do_delete_dns(&entry.hostname, &neigh.inet, &updater).await {
                                         registered.insert(key, entry);
                                     }
@@ -658,7 +658,7 @@ async fn main() -> Result<(), ()> {
                             entry.last_confirmed = Instant::now();
                             entry.ifindex = neigh.ifindex;
                         } else {
-                            debug!("reconcile neigh: kernel orphan {} -> {:?}", hostname, neigh.inet);
+                            info!("reconcile neigh: kernel orphan {} -> {:?}", hostname, neigh.inet);
                             try_register_neigh(neigh, hostname, &ip_str, &mut registered, &leases, &updater, max_ula_per_host, private_subnet_v6).await;
                         }
                     }
@@ -684,7 +684,7 @@ async fn main() -> Result<(), ()> {
                                 registered.insert(key, entry);
                                 continue;
                             };
-                            debug!("reconcile neigh: evicted {} -> {}", entry.hostname, ip_str);
+                            warn!("reconcile neigh: evicted {} -> {}", entry.hostname, ip_str);
                             if !do_delete_dns(&entry.hostname, &inet, &updater).await {
                                 registered.insert(key, entry);
                             }
