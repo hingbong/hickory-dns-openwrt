@@ -234,12 +234,12 @@ pub(crate) async fn reconcile_dns(
         match ip_str.parse::<IpAddr>() {
             Ok(IpAddr::V6(addr)) => {
                 if let Err(e) = prober.send_icmpv6_echo(addr, 0) {
-                    debug!("reconcile: probe failed for {}: {}", addr, e);
+                    warn!("reconcile: probe failed for {}: {}", addr, e);
                 }
             }
             Ok(IpAddr::V4(addr)) => {
                 if let Err(e) = prober.send_icmpv4_echo(addr, 0) {
-                    debug!("reconcile: probe failed for {}: {}", addr, e);
+                    warn!("reconcile: probe failed for {}: {}", addr, e);
                 }
             }
             _ => {}
