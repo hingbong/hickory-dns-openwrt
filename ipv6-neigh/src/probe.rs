@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU32;
 use std::time::Instant;
 
-use log::{debug, warn};
+use log::{trace, warn};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::time::Duration;
 
@@ -113,7 +113,7 @@ pub(crate) fn probe_gua_keepalive(
                 continue;
             }
             match prober.send_icmpv6_echo(e.addr, e.ifindex) {
-                Ok(()) => debug!("GUA keepalive probe: {} ({}) -> {}", e.hostname, mac, e.addr),
+                Ok(()) => trace!("GUA keepalive probe: {} ({}) -> {}", e.hostname, mac, e.addr),
                 Err(err) => warn!("GUA keepalive probe failed for {}: {}", e.addr, err),
             }
         }
