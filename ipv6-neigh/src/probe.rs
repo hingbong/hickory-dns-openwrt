@@ -208,11 +208,8 @@ pub(crate) fn run_probe_scheduler(
     }
 
     // --- GUA keepalive entries ---
-    // Flatten due entries across all hosts, sort by next_probe_due so the
-    // most urgent are served first (avoid HashMap iteration-order starvation).
+    // Collect due entries across hosts, sort by urgency to avoid starvation.
     if keepalive_enabled && keepalive_interval > 0 {
-        // Collect (mac, index_in_vec, next_probe_due) for due entries.
-        // Use owned Strings to avoid borrowing gua_keepalive across the mutable access below.
         let mut due_gua: Vec<(String, usize, Instant)> = Vec::new();
         for (mac, entries) in gua_keepalive.iter() {
             for (i, entry) in entries.iter().enumerate().take(keepalive_gua_per_host) {
@@ -265,9 +262,7 @@ pub(crate) fn prune_gua_keepalive(
     gua_keepalive.retain(|_, entries| {
         // Remove timed-out entries first.
         entries.retain(|e| now.duration_since(e.last_confirmed) < timeout);
-        // Then keep only the newest `per_host` entries (by first_seen desc).
-        // Entries are maintained in first_seen descending order by insert-at-position;
-        // truncating from the end removes the oldest entries.
+        // Keep only the newest `per_host` entries (first_seen desc; maintained by insert order).
         if entries.len() > per_host {
             entries.truncate(per_host);
         }

@@ -848,15 +848,9 @@ async fn main() -> anyhow::Result<()> {
                             for (mac, hostname) in &new_leases {
                                 leases.insert(mac.clone(), hostname.clone());
                             }
-                            // Cleanup: when the ubus table is non-empty, remove MACs
-                            // that are absent from ubus AND have no trace in registered
-                            // OR the last AXFR zone transfer.  The cross-reference
-                            // prevents premature removal during DHCP restart windows
-                            // and for devices whose DNS records are still alive.
-                            //
-                            // When probe_interval is 0, AXFR never runs and
-                            // last_axfr_hostnames stays empty; skip cleanup in that
-                            // case to avoid removing entries without the DNS safety net.
+                            // Remove MACs absent from ubus, registered, and AXFR.
+                            // Guarded by probe_interval > 0: AXFR must be running
+                            // for the DNS cross-reference to be meaningful.
                             if !new_leases.is_empty() && probe_interval > 0 {
                                 leases.retain(|mac, hostname| {
                                     new_leases.contains_key(mac)
