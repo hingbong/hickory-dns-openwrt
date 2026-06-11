@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr as StdSocketAddr};
 use std::time::{Duration, Instant};
 
@@ -153,6 +153,16 @@ fn initial_next_probe_due(now: Instant, mac: &str, ip: &str, interval: u64) -> I
     now + stable_jitter_offset(mac, ip, interval)
 }
 
+/// Tick an optional interval timer; when `None`, await forever (branch disabled).
+async fn option_tick(timer: &mut Option<time::Interval>) {
+    match timer {
+        Some(t) => {
+            t.tick().await;
+        }
+        None => std::future::pending().await,
+    }
+}
+
 /// Register a new REACHABLE neighbour in DNS and add to the registered map.
 /// Handles ULA pruning and delegates to `process_new_neigh` for the actual DNS update.
 /// Caller must ensure the (hostname, ip) key is not already in `registered`.
@@ -280,7 +290,7 @@ async fn dump_neighbours(handle: Handle, private_subnet_v4: bool) -> Result<Vec<
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), ()> {
+async fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
 
     env_logger::Builder::new()
@@ -318,12 +328,12 @@ async fn main() -> Result<(), ()> {
         .with_ptr_zones(&ipv4_ptr_subnets, args.ptr_ula);
 
     // Create reusable ICMP probe sockets once at startup.
-    let prober = Prober::new().expect("failed to create ICMP probe sockets");
+    let prober = Prober::new()?;
 
     // Wait for the DNS server to become available before sending any updates.
     wait_for_dns_server(args.dns_server).await;
 
-    let (mut connection, handle, mut messages) = new_connection().unwrap();
+    let (mut connection, handle, mut messages) = new_connection()?;
 
     connection
         .socket_mut()
@@ -377,6 +387,7 @@ async fn main() -> Result<(), ()> {
     let mut registered: HashMap<(String, String), RegisteredEntry> = HashMap::new();
     let mut gua_keepalive: HashMap<String, Vec<GuaKeepaliveEntry>> = HashMap::new();
     let mut dns_orphan_since: HashMap<(String, String), Instant> = HashMap::new();
+    let mut last_axfr_hostnames: HashSet<String> = HashSet::new();
 
     let prefix_filter_v6 = if keepalive_gua {
         false
@@ -430,7 +441,9 @@ async fn main() -> Result<(), ()> {
                                 let entries = gua_keepalive.entry(neigh.mac.clone()).or_default();
                                 if !entries.iter().any(|e| e.addr == *addr) {
                                     let now = Instant::now();
-                                    entries.push(GuaKeepaliveEntry {
+                                    // Instant is monotonic; now >= all existing first_seen,
+                                    // so insert at position 0 maintains descending order.
+                                    entries.insert(0, GuaKeepaliveEntry {
                                         addr: *addr,
                                         ifindex: neigh.ifindex,
                                         first_seen: now,
@@ -515,20 +528,20 @@ async fn main() -> Result<(), ()> {
     scheduler_tick.tick().await; // skip the immediate first tick (consistent with other timers)
 
     // Probe timer: now only runs reconcile_dns + dump_neighbours (no batch probes).
-    let mut probe_timer = if probe_interval > 0 {
-        time::interval(Duration::from_secs(probe_interval))
-    } else {
-        time::interval(Duration::from_secs(u64::MAX / 2))
-    };
-    probe_timer.tick().await;
+    // Uses Option<Interval> instead of a u64::MAX/2 sentinel to avoid relying on
+    // tokio Instant overflow behaviour for far-future durations.
+    let mut probe_timer: Option<time::Interval> = (probe_interval > 0)
+        .then(|| time::interval(Duration::from_secs(probe_interval)));
+    if let Some(ref mut t) = probe_timer {
+        t.tick().await;
+    }
 
     // GUA keepalive timer: now only runs pruning (probes are handled by the scheduler).
-    let mut gua_keepalive_timer = if keepalive_gua && keepalive_gua_interval > 0 {
-        time::interval(Duration::from_secs(keepalive_gua_interval))
-    } else {
-        time::interval(Duration::from_secs(u64::MAX / 2))
-    };
-    gua_keepalive_timer.tick().await;
+    let mut gua_keepalive_timer: Option<time::Interval> = (keepalive_gua && keepalive_gua_interval > 0)
+        .then(|| time::interval(Duration::from_secs(keepalive_gua_interval)));
+    if let Some(ref mut t) = gua_keepalive_timer {
+        t.tick().await;
+    }
 
     let mut lease_refresh_timer = time::interval(Duration::from_secs(60));
     lease_refresh_timer.tick().await;
@@ -550,10 +563,11 @@ async fn main() -> Result<(), ()> {
                                 continue;
                             }
 
+                            let ip_str = inet_to_string(&neigh.inet);
+
                             if let NeighbourAddress::Inet6(addr) = &neigh.inet
                                 && !ipv6_passes_active_prefix(*addr, &active_prefixes) {
                                     trace!("event: skipping {} -- not in any active LAN prefix", addr);
-                                    let ip_str = inet_to_string(&neigh.inet);
                                     let key_opt: Option<(String, String)> = leases
                                         .get(&neigh.mac)
                                         .map(|h| (h.clone(), ip_str.clone()))
@@ -588,7 +602,9 @@ async fn main() -> Result<(), ()> {
                                                     e.ifindex = neigh.ifindex;
                                                 } else {
                                                     let now = Instant::now();
-                                                    entries.push(GuaKeepaliveEntry {
+                                                    // Instant is monotonic; now >= all existing first_seen,
+                                                    // so insert at position 0 maintains descending order.
+                                                    entries.insert(0, GuaKeepaliveEntry {
                                                         addr: *addr,
                                                         ifindex: neigh.ifindex,
                                                         first_seen: now,
@@ -614,7 +630,6 @@ async fn main() -> Result<(), ()> {
                                 }
 
                             if is_failed_state(neigh.state) {
-                                let ip_str = inet_to_string(&neigh.inet);
                                 // Look up hostname via MAC (preferred) or fall back to IP-based
                                 // search in `registered` (handles FAILED events without lladdr).
                                 let key_opt: Option<(String, String)> = leases
@@ -636,7 +651,6 @@ async fn main() -> Result<(), ()> {
                                 continue;
                             }
 
-                            let ip_str = inet_to_string(&neigh.inet);
                             if neigh.state == NeighbourState::Reachable {
                                 if let Some(hostname) = leases.get(&neigh.mac) {
                                     let key = (hostname.clone(), ip_str.clone());
@@ -712,10 +726,7 @@ async fn main() -> Result<(), ()> {
                     trace!("scheduler: sent {} probes", sent);
                 }
             }
-            _ = probe_timer.tick() => {
-                if probe_interval == 0 {
-                    continue;
-                }
+            _ = option_tick(&mut probe_timer) => {
                 let grace_period = Duration::from_secs(probe_interval.saturating_mul(2));
                 reconcile_dns(
                     &updater,
@@ -728,6 +739,7 @@ async fn main() -> Result<(), ()> {
                     router_ifindex,
                     &mut dns_orphan_since,
                     grace_period,
+                    &mut last_axfr_hostnames,
                 )
                 .await;
 
@@ -818,10 +830,7 @@ async fn main() -> Result<(), ()> {
                     }
                 }
             }
-            _ = gua_keepalive_timer.tick() => {
-                if !keepalive_gua || keepalive_gua_interval == 0 {
-                    continue;
-                }
+            _ = option_tick(&mut gua_keepalive_timer) => {
                 prune_gua_keepalive(&mut gua_keepalive, keepalive_gua_interval, keepalive_gua_per_host);
             }
             _ = lease_refresh_timer.tick() => {
@@ -836,8 +845,24 @@ async fn main() -> Result<(), ()> {
                             // restarts and only some clients have renewed.
                             let old_count = leases.len();
                             let new_count = new_leases.len();
-                            for (mac, hostname) in new_leases {
-                                leases.insert(mac, hostname);
+                            for (mac, hostname) in &new_leases {
+                                leases.insert(mac.clone(), hostname.clone());
+                            }
+                            // Cleanup: when the ubus table is non-empty, remove MACs
+                            // that are absent from ubus AND have no trace in registered
+                            // OR the last AXFR zone transfer.  The cross-reference
+                            // prevents premature removal during DHCP restart windows
+                            // and for devices whose DNS records are still alive.
+                            //
+                            // When probe_interval is 0, AXFR never runs and
+                            // last_axfr_hostnames stays empty; skip cleanup in that
+                            // case to avoid removing entries without the DNS safety net.
+                            if !new_leases.is_empty() && probe_interval > 0 {
+                                leases.retain(|mac, hostname| {
+                                    new_leases.contains_key(mac)
+                                        || registered.iter().any(|((h, _), _)| h == hostname)
+                                        || last_axfr_hostnames.contains(hostname)
+                                });
                             }
                             debug!("refreshed DHCP leases: {} from ubus, {} total (had {})",
                                 new_count, leases.len(), old_count);
