@@ -147,7 +147,7 @@ pub(crate) async fn prune_ula_for_host(
 ///    immediately (they belong to a prefix that is no longer active on the router).
 /// 2. **DNS orphans** -- records present in DNS but absent from `registered`.
 ///    These are probed first; only deleted after a grace period (2× probe_interval)
-///    of persistent absence, avoiding transient DNS churn (suggestion #10).
+///    of persistent absence, avoiding transient DNS churn.
 /// 3. **Registered orphans** -- entries in `registered` that are missing from DNS (e.g.
 ///    because hickory-dns restarted and lost its in-memory state).  These are re-pushed
 ///    via DNS UPDATE so the zone stays consistent.
@@ -180,8 +180,8 @@ pub(crate) async fn reconcile_dns(
     let lease_hostnames: HashSet<&str> = leases.values().map(String::as_str).collect();
 
     // Set of (hostname, ip_str) tuples for DNS records that pass all filters.
-    // Uses (hostname, ip) as the key (suggestion #11) to avoid shadowing when
-    // two different hostnames share the same IP.
+    // Uses (hostname, ip) as the key to avoid shadowing when two different
+    // hostnames share the same IP.
     let mut dns_keys: HashSet<(String, String)> = HashSet::new();
 
     for (hostname, ip) in &dns_records {
@@ -226,8 +226,8 @@ pub(crate) async fn reconcile_dns(
 
     // --- DNS orphans (in DNS but not in registered) ---
     // Two-pass: first-time orphans are probed and tracked; only deleted after
-    // the grace period expires (suggestion #10). Previously-tracked orphans that
-    // have since been registered are cleared from orphan tracking.
+    // the grace period expires. Previously-tracked orphans that have since been
+    // registered are cleared from orphan tracking.
     for (hostname, ip_str) in &dns_keys {
         let key = (hostname.clone(), ip_str.clone());
         if registered.contains_key(&key) {
@@ -321,7 +321,7 @@ pub(crate) async fn reconcile_dns(
                             hostname, ip_str, e
                         );
                     }
-                // DNS sync success — update last_dns_synced, NOT last_confirmed (suggestion #7).
+                // DNS sync success — update last_dns_synced, NOT last_confirmed.
                 entry.last_dns_synced = Instant::now();
             }
             Err(e) => warn!(
