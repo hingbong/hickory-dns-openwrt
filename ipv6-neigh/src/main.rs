@@ -826,8 +826,17 @@ async fn main() -> Result<(), ()> {
                         if new_leases.is_empty() && !leases.is_empty() {
                             warn!("DHCP lease table is empty (server restart?); keeping previous {} leases", leases.len());
                         } else {
-                            leases = new_leases;
-                            debug!("refreshed {} DHCP leases", leases.len());
+                            // Merge: new ubus entries overwrite matching MACs,
+                            // old entries for MACs not yet re-leased are preserved.
+                            // This avoids losing mappings when the DHCP server
+                            // restarts and only some clients have renewed.
+                            let old_count = leases.len();
+                            let new_count = new_leases.len();
+                            for (mac, hostname) in new_leases {
+                                leases.insert(mac, hostname);
+                            }
+                            debug!("refreshed DHCP leases: {} from ubus, {} total (had {})",
+                                new_count, leases.len(), old_count);
                         }
                     }
                     Ok(Err(e)) => warn!("failed to refresh DHCP leases from ubus: {}", e),
