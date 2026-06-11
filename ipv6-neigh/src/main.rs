@@ -143,14 +143,14 @@ fn parse_ipv4_cidr(s: &str) -> (Ipv4Addr, u8) {
     (addr, prefix_len)
 }
 
-/// Compute an effective interval for scheduler use — maps 0 to a sentinel far-future
-/// value so the scheduler never fires probes when probing is disabled.
-fn scheduler_interval(interval: u64) -> u64 {
+/// Compute the initial `next_probe_due` for a (mac, ip) pair using a stable
+/// jitter offset. When `interval` is 0 (probing disabled), returns a far-future
+/// sentinel so the scheduler never reaches it.
+fn initial_next_probe_due(now: Instant, mac: &str, ip: &str, interval: u64) -> Instant {
     if interval == 0 {
-        u64::MAX / 2
-    } else {
-        interval
+        return now + Duration::from_secs(365 * 24 * 3600);
     }
+    now + stable_jitter_offset(mac, ip, interval)
 }
 
 /// Register a new REACHABLE neighbour in DNS and add to the registered map.
@@ -167,6 +167,15 @@ async fn try_register_neigh(
     private_subnet_v6: bool,
     probe_interval: u64,
 ) {
+    // max_ula_per_host=0 means ULA publishing is entirely disabled.
+    if max_ula_per_host == 0
+        && let NeighbourAddress::Inet6(addr) = &neigh.inet
+        && if_ipv6_in_private_subnet(addr)
+    {
+        trace!("ULA publish disabled (max_ula_per_host=0) for host {}", hostname);
+        return;
+    }
+
     // Enforce per-host ULA limit before adding.
     if let NeighbourAddress::Inet6(addr) = &neigh.inet
         && if_ipv6_in_private_subnet(addr) {
@@ -174,8 +183,6 @@ async fn try_register_neigh(
         }
     if process_new_neigh(neigh, updater, leases, private_subnet_v6).await {
         let now = Instant::now();
-        let eff_interval = scheduler_interval(probe_interval);
-        let offset = stable_jitter_offset(&neigh.mac, ip_str, eff_interval);
         registered.insert(
             (hostname.to_owned(), ip_str.to_owned()),
             RegisteredEntry {
@@ -183,7 +190,7 @@ async fn try_register_neigh(
                 last_confirmed: now,
                 last_dns_synced: now,
                 last_probe_sent: now,
-                next_probe_due: now + offset,
+                next_probe_due: initial_next_probe_due(now, &neigh.mac, ip_str, probe_interval),
                 ifindex: neigh.ifindex,
             },
         );
@@ -423,19 +430,18 @@ async fn main() -> Result<(), ()> {
                                 let entries = gua_keepalive.entry(neigh.mac.clone()).or_default();
                                 if !entries.iter().any(|e| e.addr == *addr) {
                                     let now = Instant::now();
-                                    let eff_interval = scheduler_interval(keepalive_gua_interval);
-                                    let offset = stable_jitter_offset(
-                                        &neigh.mac,
-                                        &addr.to_string(),
-                                        eff_interval,
-                                    );
                                     entries.push(GuaKeepaliveEntry {
                                         addr: *addr,
                                         ifindex: neigh.ifindex,
                                         first_seen: now,
                                         last_confirmed: now,
                                         last_probe_sent: now,
-                                        next_probe_due: now + offset,
+                                        next_probe_due: initial_next_probe_due(
+                                            now,
+                                            &neigh.mac,
+                                            &addr.to_string(),
+                                            keepalive_gua_interval,
+                                        ),
                                     });
                                     trace!(
                                         "init dump: GUA keepalive tracked {} -> {}",
@@ -547,9 +553,17 @@ async fn main() -> Result<(), ()> {
                             if let NeighbourAddress::Inet6(addr) = &neigh.inet
                                 && !ipv6_passes_active_prefix(*addr, &active_prefixes) {
                                     trace!("event: skipping {} -- not in any active LAN prefix", addr);
-                                    let key = (neigh.mac.clone(), inet_to_string(&neigh.inet));
-                                    if let Some(entry) = registered.remove(&key) {
-                                        do_delete_dns(&entry.hostname, &neigh.inet, &updater).await;
+                                    let ip_str = inet_to_string(&neigh.inet);
+                                    let key_opt: Option<(String, String)> = leases
+                                        .get(&neigh.mac)
+                                        .map(|h| (h.clone(), ip_str.clone()))
+                                        .or_else(|| registered.keys().find(|(_, ip)| ip == &ip_str).cloned());
+                                    if let Some(key) = key_opt {
+                                        if let Some(entry) = registered.remove(&key) {
+                                            if !do_delete_dns(&entry.hostname, &neigh.inet, &updater).await {
+                                                registered.insert(key, entry);
+                                            }
+                                        }
                                     }
                                     if let Some(entries) = gua_keepalive.get_mut(&neigh.mac) {
                                         entries.retain(|e| e.addr != *addr);
@@ -574,19 +588,18 @@ async fn main() -> Result<(), ()> {
                                                     e.ifindex = neigh.ifindex;
                                                 } else {
                                                     let now = Instant::now();
-                                                    let eff_interval = scheduler_interval(keepalive_gua_interval);
-                                                    let offset = stable_jitter_offset(
-                                                        &neigh.mac,
-                                                        &addr.to_string(),
-                                                        eff_interval,
-                                                    );
                                                     entries.push(GuaKeepaliveEntry {
                                                         addr: *addr,
                                                         ifindex: neigh.ifindex,
                                                         first_seen: now,
                                                         last_confirmed: now,
                                                         last_probe_sent: now,
-                                                        next_probe_due: now + offset,
+                                                        next_probe_due: initial_next_probe_due(
+                                                            now,
+                                                            &neigh.mac,
+                                                            &addr.to_string(),
+                                                            keepalive_gua_interval,
+                                                        ),
                                                     });
                                                     trace!("GUA keepalive: tracking {} -> {}", hostname, addr);
                                                 }
@@ -616,7 +629,9 @@ async fn main() -> Result<(), ()> {
                                 if let Some(key) = key_opt
                                     && let Some(entry) = registered.remove(&key) {
                                         info!("FAILED: removing {} -> {:?}", entry.hostname, neigh.inet);
-                                        do_delete_dns(&entry.hostname, &neigh.inet, &updater).await;
+                                        if !do_delete_dns(&entry.hostname, &neigh.inet, &updater).await {
+                                            registered.insert(key, entry);
+                                        }
                                     }
                                 continue;
                             }
@@ -671,8 +686,11 @@ async fn main() -> Result<(), ()> {
 
                             trace!("Del neighbour: {:?}", neigh);
                             if let Some(key) = key_opt {
-                                registered.remove(&key);
-                                do_delete_dns(&key.0, &neigh.inet, &updater).await;
+                                if let Some(entry) = registered.remove(&key) {
+                                    if !do_delete_dns(&entry.hostname, &neigh.inet, &updater).await {
+                                        registered.insert(key, entry);
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -688,6 +706,7 @@ async fn main() -> Result<(), ()> {
                     probe_interval,
                     keepalive_gua_interval,
                     keepalive_gua,
+                    keepalive_gua_per_host,
                 );
                 if sent > 0 {
                     trace!("scheduler: sent {} probes", sent);
