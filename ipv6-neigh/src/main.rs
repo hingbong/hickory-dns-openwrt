@@ -823,8 +823,12 @@ async fn main() -> Result<(), ()> {
             _ = lease_refresh_timer.tick() => {
                 match tokio::task::spawn_blocking(|| op::get_lease().map_err(|e| e.to_string())).await {
                     Ok(Ok(new_leases)) => {
-                        leases = new_leases;
-                        debug!("refreshed {} DHCP leases", leases.len());
+                        if new_leases.is_empty() && !leases.is_empty() {
+                            warn!("DHCP lease table is empty (server restart?); keeping previous {} leases", leases.len());
+                        } else {
+                            leases = new_leases;
+                            debug!("refreshed {} DHCP leases", leases.len());
+                        }
                     }
                     Ok(Err(e)) => warn!("failed to refresh DHCP leases from ubus: {}", e),
                     Err(e) => warn!("DHCP lease refresh task panicked: {}", e),
