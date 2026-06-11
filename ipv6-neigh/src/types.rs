@@ -75,7 +75,14 @@ pub(crate) struct GuaKeepaliveEntry {
 
 /// Compute a stable jitter offset for a (mac, ip) pair within the given interval window.
 /// Uses a deterministic hash so the phase is preserved across daemon restarts.
+///
+/// `interval_secs` must be > 0; passing 0 will panic (the caller is expected to
+/// guard this via `scheduler_interval()` which maps 0 to a sentinel value).
 pub(crate) fn stable_jitter_offset(mac: &str, ip: &str, interval_secs: u64) -> Duration {
+    assert!(
+        interval_secs > 0,
+        "stable_jitter_offset: interval_secs must be > 0"
+    );
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();

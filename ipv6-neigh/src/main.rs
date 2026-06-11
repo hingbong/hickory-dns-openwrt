@@ -512,6 +512,7 @@ async fn main() -> Result<(), ()> {
 
     // 1-second scheduler tick for per-IP stable-jitter probes + socket drain.
     let mut scheduler_tick = time::interval(Duration::from_secs(1));
+    scheduler_tick.tick().await; // skip the immediate first tick (consistent with other timers)
 
     // Probe timer: now only runs reconcile_dns + dump_neighbours (no batch probes).
     let mut probe_timer = if probe_interval > 0 {

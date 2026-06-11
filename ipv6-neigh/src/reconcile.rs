@@ -292,6 +292,12 @@ pub(crate) async fn reconcile_dns(
         orphan_since.remove(&key);
     }
 
+    // Prune orphan_since entries whose DNS record no longer appears in AXFR
+    // (e.g. deleted externally or the hostname fell out of the lease table).
+    // Without this, orphan_since would leak small entries indefinitely.
+    orphan_since
+        .retain(|(hostname, ip_str), _| dns_keys.contains(&(hostname.clone(), ip_str.clone())));
+
     // --- Registered orphans (in registered but not in DNS) ---
     for ((hostname, ip_str), entry) in registered.iter_mut() {
         if dns_keys.contains(&(hostname.clone(), ip_str.clone())) {
