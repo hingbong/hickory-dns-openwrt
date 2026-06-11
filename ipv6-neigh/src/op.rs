@@ -72,17 +72,23 @@ fn mac_from_duid(duid: &str) -> Option<String> {
 pub fn get_lease() -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
     // dhcpv6 does not use mac address, so we only need to get ipv4 leases
     let leases = call_ubus("dhcp", "ipv4leases")?;
-    let devices = leases["device"].as_object()
+    let devices = leases["device"]
+        .as_object()
         .ok_or("missing 'device' in ipv4leases response")?;
 
     let mut result = HashMap::new();
 
     for (_device, leases) in devices {
-        let leases = leases["leases"].as_array()
+        let leases = leases["leases"]
+            .as_array()
             .ok_or("missing 'leases' array in device")?;
         for lease in leases {
-            let Some(raw_mac) = lease["mac"].as_str() else { continue };
-            let Some(hostname) = lease["hostname"].as_str() else { continue };
+            let Some(raw_mac) = lease["mac"].as_str() else {
+                continue;
+            };
+            let Some(hostname) = lease["hostname"].as_str() else {
+                continue;
+            };
             let mac = hex_to_mac(raw_mac);
             let hostname = sanitize_hostname(hostname);
             if hostname.is_empty() {
@@ -98,15 +104,23 @@ pub fn get_lease() -> Result<HashMap<String, String>, Box<dyn std::error::Error>
     if let Ok(v6leases) = call_ubus("dhcp", "ipv6leases") {
         if let Some(devices) = v6leases["device"].as_object() {
             for (_device, device_data) in devices {
-                let Some(leases) = device_data["leases"].as_array() else { continue };
+                let Some(leases) = device_data["leases"].as_array() else {
+                    continue;
+                };
                 for lease in leases {
-                    let Some(duid) = lease["duid"].as_str() else { continue };
-                    let Some(hostname) = lease["hostname"].as_str() else { continue };
+                    let Some(duid) = lease["duid"].as_str() else {
+                        continue;
+                    };
+                    let Some(hostname) = lease["hostname"].as_str() else {
+                        continue;
+                    };
                     let hostname = sanitize_hostname(hostname);
                     if hostname.is_empty() {
                         continue;
                     }
-                    let Some(mac) = mac_from_duid(duid) else { continue };
+                    let Some(mac) = mac_from_duid(duid) else {
+                        continue;
+                    };
                     // IPv4 mapping takes precedence
                     result.entry(mac).or_insert(hostname);
                 }
