@@ -24,15 +24,14 @@ pub(crate) async fn process_new_neigh(
     };
 
     // Guard: never publish GUA to DNS when private_subnet_v6 is set.
-    if let NeighbourAddress::Inet6(addr) = &neigh.inet {
-        if private_subnet_v6 && is_gua_ipv6(addr) {
+    if let NeighbourAddress::Inet6(addr) = &neigh.inet
+        && private_subnet_v6 && is_gua_ipv6(addr) {
             debug!(
                 "skipping GUA DNS publish for {} (private_subnet_v6)",
                 hostname
             );
             return false;
         }
-    }
 
     let result = match &neigh.inet {
         NeighbourAddress::Inet6(addr) => updater.upsert_aaaa(hostname, *addr, DEFAULT_TTL).await,
@@ -108,7 +107,7 @@ pub(crate) async fn prune_ula_for_host(
             h == host
                 && ip_str
                     .parse::<Ipv6Addr>()
-                    .map_or(false, |a| if_ipv6_in_private_subnet(&a))
+                    .is_ok_and(|a| if_ipv6_in_private_subnet(&a))
         })
         .map(|(k, e)| (k.clone(), e.last_confirmed))
         .collect();
@@ -275,14 +274,13 @@ pub(crate) async fn reconcile_dns(
         match del_result {
             Ok(()) => {
                 info!("reconcile: deleted orphan DNS {} -> {}", hostname, ip_str);
-                if let Ok(ip) = ip_str.parse::<IpAddr>() {
-                    if let Err(e) = updater.delete_ptr(ip).await {
+                if let Ok(ip) = ip_str.parse::<IpAddr>()
+                    && let Err(e) = updater.delete_ptr(ip).await {
                         warn!(
                             "reconcile: PTR delete failed for orphan {} {}: {}",
                             hostname, ip_str, e
                         );
                     }
-                }
             }
             Err(e) => warn!(
                 "reconcile: failed to delete orphan {} {}: {}",
@@ -316,14 +314,13 @@ pub(crate) async fn reconcile_dns(
         match result {
             Ok(()) => {
                 info!("reconcile: re-pushed {} -> {}", hostname, ip_str);
-                if let Ok(ip) = ip_str.parse::<IpAddr>() {
-                    if let Err(e) = updater.upsert_ptr(ip, hostname, DEFAULT_TTL).await {
+                if let Ok(ip) = ip_str.parse::<IpAddr>()
+                    && let Err(e) = updater.upsert_ptr(ip, hostname, DEFAULT_TTL).await {
                         warn!(
                             "reconcile: PTR re-push failed for {} {}: {}",
                             hostname, ip_str, e
                         );
                     }
-                }
                 // DNS sync success — update last_dns_synced, NOT last_confirmed (suggestion #7).
                 entry.last_dns_synced = Instant::now();
             }

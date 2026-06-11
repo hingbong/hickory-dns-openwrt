@@ -4,7 +4,7 @@ use std::path::Path;
 
 pub fn call_ubus(obj_path: &str, method: &str) -> Result<Value, Box<dyn std::error::Error>> {
     let socket = Path::new("/var/run/ubus/ubus.sock");
-    let mut connection = ubus::Connection::connect(&socket)?;
+    let mut connection = ubus::Connection::connect(socket)?;
     let json = connection.call(obj_path, method, "")?;
     let parsed: Value = serde_json::from_str(&json)?;
     Ok(parsed)
@@ -101,8 +101,8 @@ pub fn get_lease() -> Result<HashMap<String, String>, Box<dyn std::error::Error>
 
     // Supplement with IPv6 leases: extract MAC from DUID when available.
     // IPv4 entries take precedence; only fill in missing MACs here.
-    if let Ok(v6leases) = call_ubus("dhcp", "ipv6leases") {
-        if let Some(devices) = v6leases["device"].as_object() {
+    if let Ok(v6leases) = call_ubus("dhcp", "ipv6leases")
+        && let Some(devices) = v6leases["device"].as_object() {
             for (_device, device_data) in devices {
                 let Some(leases) = device_data["leases"].as_array() else {
                     continue;
@@ -126,7 +126,6 @@ pub fn get_lease() -> Result<HashMap<String, String>, Box<dyn std::error::Error>
                 }
             }
         }
-    }
 
     Ok(result)
 }
