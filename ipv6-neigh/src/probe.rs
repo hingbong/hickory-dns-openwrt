@@ -227,7 +227,7 @@ pub(crate) fn prune_gua_keepalive(
         entries.retain(|e| now.duration_since(e.last_confirmed) < timeout);
         // Then keep only the newest `per_host` entries (by first_seen desc).
         if entries.len() > per_host {
-            entries.sort_by(|a, b| b.first_seen.cmp(&a.first_seen));
+            entries.sort_by_key(|b| std::cmp::Reverse(b.first_seen));
             entries.truncate(per_host);
         }
         !entries.is_empty()

@@ -60,7 +60,6 @@ pub(crate) struct RegisteredEntry {
 
 /// A GUA address tracked for keepalive probing only (not published to DNS).
 pub(crate) struct GuaKeepaliveEntry {
-    pub(crate) hostname: String,
     pub(crate) addr: Ipv6Addr,
     pub(crate) ifindex: u32,
     /// When this GUA was first observed -- used to select the "newest" address per host.
@@ -88,6 +87,6 @@ pub(crate) fn stable_jitter_offset(mac: &str, ip: &str, interval_secs: u64) -> D
     let mut hasher = DefaultHasher::new();
     mac.hash(&mut hasher);
     ip.hash(&mut hasher);
-    let offset_ms = (hasher.finish() % (interval_secs * 1000)) as u64;
+    let offset_ms = hasher.finish() % (interval_secs * 1000) ;
     Duration::from_millis(offset_ms)
 }

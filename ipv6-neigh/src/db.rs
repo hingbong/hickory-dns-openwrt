@@ -358,7 +358,7 @@ impl DnsUpdater {
 /// e.g. 192.168.3.5 -> `5.3.168.192.in-addr.arpa.`
 fn ipv4_ptr_name(addr: Ipv4Addr) -> Name {
     let o = addr.octets();
-    Name::from_ascii(&format!(
+    Name::from_ascii(format!(
         "{}.{}.{}.{}.in-addr.arpa.",
         o[3], o[2], o[1], o[0]
     ))
@@ -377,7 +377,7 @@ fn ipv6_ptr_name(addr: Ipv6Addr) -> Name {
             [lo, '.', hi, '.']
         })
         .collect();
-    Name::from_ascii(&format!("{}ip6.arpa.", nibbles)).expect("always valid")
+    Name::from_ascii(format!("{}ip6.arpa.", nibbles)).expect("always valid")
 }
 
 /// Derive the reverse zone name for an IPv4 subnet (only /8, /16, /24 boundaries).
