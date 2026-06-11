@@ -175,6 +175,10 @@ pub(crate) fn run_probe_scheduler(
                 entry.last_probe_sent = now;
                 entry.next_probe_due = now + Duration::from_secs(probe_interval);
                 sent += 1;
+            } else {
+                // Send failed — back off briefly so one unreachable entry
+                // doesn't burn a probe slot every tick.
+                entry.next_probe_due = now + Duration::from_secs(5);
             }
         }
     }
@@ -196,6 +200,9 @@ pub(crate) fn run_probe_scheduler(
                     entry.last_probe_sent = now;
                     entry.next_probe_due = now + Duration::from_secs(keepalive_interval);
                     sent += 1;
+                } else {
+                    // Send failed — back off briefly.
+                    entry.next_probe_due = now + Duration::from_secs(5);
                 }
             }
         }
