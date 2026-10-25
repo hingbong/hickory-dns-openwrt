@@ -29,6 +29,8 @@ _mcpu:=$(patsubst -mcpu=%,%,$(filter -mcpu=%,$(TARGET_CFLAGS)))
 _mcpu_parts:=$(subst +,$(_space),$(_mcpu))
 _cpu_base:=$(firstword $(_mcpu_parts))
 _cpu_feats:=$(subst $(_space),$(_comma),$(addprefix +,$(wordlist 2,99,$(_mcpu_parts))))
+# rustc does not know GCC's "+crypto"; LLVM defines it as AES+PMULL plus SHA1+SHA256.
+_cpu_feats:=$(subst +crypto,+aes$(_comma)+sha2,$(_cpu_feats))
 PKG_RUST_CPU_FLAGS:=$(if $(_cpu_base),-Ctarget-cpu=$(_cpu_base)$(if $(_cpu_feats), -Ctarget-feature=$(_cpu_feats)))
 
 define Package/hickory-dns

@@ -21,7 +21,7 @@ jobs:
       - name: Build ipv6-neigh for aarch64
         working-directory: ipv6-neigh
         env:
-          RUSTFLAGS: "-C target-cpu=cortex-a53 -C target-feature=+crc,+crypto"
+          RUSTFLAGS: "-C target-cpu=cortex-a53 -C target-feature=+crc,+aes,+sha2"
         run: |
           cross build --release --target aarch64-unknown-linux-musl
 
