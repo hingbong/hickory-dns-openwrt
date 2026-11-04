@@ -41,7 +41,7 @@ use reconcile::{
 };
 use types::{
     GuaKeepaliveEntry, Neigh, RTNLGRP_NEIGH, RegisteredEntry, format_mac, nl_mgrp,
-    stable_jitter_offset,
+    should_track_gua, stable_jitter_offset,
 };
 
 #[derive(Debug, Parser)]
@@ -96,7 +96,11 @@ struct Cli {
     /// Keepalive interval in seconds for GUA addresses; each due tick refreshes
     /// the neighbour entry with the known MAC and then sends an ICMPv6 echo
     /// (only used with --keepalive-gua)
-    #[clap(long, default_value = "120")]
+    ///
+    /// The default must stay below the kernel's net.ipv6.neigh.<if>.gc_stale_time
+    /// (60s by default): a STALE entry that is not refreshed within that window
+    /// is garbage-collected, and the next probe would fall back to a multicast NS.
+    #[clap(long, default_value = "30")]
     keepalive_gua_interval: u64,
 
     /// Maximum number of GUA addresses to keepalive-probe per host
@@ -193,6 +197,12 @@ fn initial_next_probe_due(now: Instant, mac: &str, ip: &str, interval: u64) -> I
 }
 
 /// Insert or refresh a GUA keepalive entry (newest first).
+///
+/// `confirmed` is true only for a kernel REACHABLE notification.  An existing
+/// entry always learns the current ifindex, but its `last_confirmed` timestamp
+/// (used by pruning) only moves on a real reachability signal.  A newly seen
+/// entry starts with `last_confirmed = now`, giving it a full prune window to be
+/// confirmed even when the notification that introduced it was STALE.
 fn upsert_gua_entry(
     gua_keepalive: &mut HashMap<String, Vec<GuaKeepaliveEntry>>,
     mac: &str,
@@ -200,11 +210,14 @@ fn upsert_gua_entry(
     ifindex: u32,
     now: Instant,
     interval: u64,
+    confirmed: bool,
 ) {
     let entries = gua_keepalive.entry(mac.to_owned()).or_default();
     if let Some(entry) = entries.iter_mut().find(|e| e.addr == addr) {
-        entry.last_confirmed = now;
         entry.ifindex = ifindex;
+        if confirmed {
+            entry.last_confirmed = now;
+        }
     } else {
         entries.insert(
             0,
@@ -217,6 +230,25 @@ fn upsert_gua_entry(
             },
         );
     }
+}
+
+/// Remove a GUA keepalive entry by address, regardless of which MAC bucket
+/// holds it.  FAILED notifications usually arrive without a link-layer address,
+/// so the bucket cannot be located from the event itself.
+///
+/// Returns true when an entry was removed; now-empty buckets are dropped.
+fn remove_gua_entry(
+    gua_keepalive: &mut HashMap<String, Vec<GuaKeepaliveEntry>>,
+    addr: Ipv6Addr,
+) -> bool {
+    let mut removed = false;
+    gua_keepalive.retain(|_, entries| {
+        let before = entries.len();
+        entries.retain(|e| e.addr != addr);
+        removed |= entries.len() != before;
+        !entries.is_empty()
+    });
+    removed
 }
 
 /// Tick an optional interval timer; when `None`, await forever (branch disabled).
@@ -539,48 +571,46 @@ async fn main() -> anyhow::Result<()> {
 
             if let NeighbourAddress::Inet6(addr) = &neigh.inet
                 && !active_prefixes.is_empty()
-                    && !active_prefixes.iter().any(|p| ipv6_in_prefix(*addr, p))
-                {
-                    trace!(
-                        "init dump: skipping {} -- not in any active LAN prefix",
-                        addr
-                    );
-                    continue;
-                }
+                && !active_prefixes.iter().any(|p| ipv6_in_prefix(*addr, p))
+            {
+                trace!(
+                    "init dump: skipping {} -- not in any active LAN prefix",
+                    addr
+                );
+                continue;
+            }
 
             // Route GUA addresses to keepalive map instead of DNS.
             if let NeighbourAddress::Inet6(addr) = &neigh.inet
-                && is_gua_ipv6(addr) {
-                    if keepalive_gua {
-                        if should_publish_state(neigh.state) {
-                            if let Some(hostname) = leases.get(&neigh.mac) {
-                                upsert_gua_entry(
-                                    &mut gua_keepalive,
-                                    &neigh.mac,
-                                    *addr,
-                                    neigh.ifindex,
-                                    Instant::now(),
-                                    keepalive_gua_interval,
-                                );
-                                trace!(
-                                    "init dump: GUA keepalive tracked {} -> {}",
-                                    hostname, addr
-                                );
-                            }
-                        } else if matches!(
-                            neigh.state,
-                            NeighbourState::Stale | NeighbourState::Delay | NeighbourState::Probe
-                        ) {
-                            match prober.send_icmpv6_echo(*addr, neigh.ifindex) {
-                                Ok(_) => trace!("init dump: probing stale GUA {}", addr),
-                                Err(e) => warn!("init GUA probe failed for {}: {}", addr, e),
-                            }
-                        }
-                    }
-                    if private_subnet_v6 {
-                        continue;
-                    }
+                && is_gua_ipv6(addr)
+            {
+                if keepalive_gua
+                    && should_track_gua(neigh.state, &neigh.mac)
+                    && let Some(hostname) = leases.get(&neigh.mac)
+                {
+                    // Track STALE/DELAY/PROBE as well: after a service restart
+                    // (or a prefix change) the kernel has usually demoted the old
+                    // GUA to STALE, and waiting for a REACHABLE event would mean
+                    // the entry is never adopted before it is GC'd.  The
+                    // scheduler sends the first probe within one interval.
+                    upsert_gua_entry(
+                        &mut gua_keepalive,
+                        &neigh.mac,
+                        *addr,
+                        neigh.ifindex,
+                        Instant::now(),
+                        keepalive_gua_interval,
+                        neigh.state == NeighbourState::Reachable,
+                    );
+                    trace!(
+                        "init dump: GUA keepalive tracked {} -> {} (state {:?})",
+                        hostname, addr, neigh.state
+                    );
                 }
+                if private_subnet_v6 {
+                    continue;
+                }
+            }
 
             let ip_str = inet_to_string(&neigh.inet);
             match neigh.state {
@@ -592,7 +622,10 @@ async fn main() -> anyhow::Result<()> {
                             // max_ula_per_host; otherwise keep the registered one.
                             let new_ula = match &neigh.inet {
                                 NeighbourAddress::Inet6(addr)
-                                    if if_ipv6_in_private_subnet(addr) => Some(*addr),
+                                    if if_ipv6_in_private_subnet(addr) =>
+                                {
+                                    Some(*addr)
+                                }
                                 _ => None,
                             };
                             let at_limit = new_ula.is_some()
@@ -706,12 +739,27 @@ async fn main() -> anyhow::Result<()> {
                                 && is_gua_ipv6(addr) && private_subnet_v6 {
                                     if keepalive_gua {
                                         if is_failed_state(neigh.state) {
-                                            if let Some(entries) = gua_keepalive.get_mut(&neigh.mac) {
-                                                entries.retain(|e| e.addr != *addr);
-                                                trace!("GUA keepalive: removed failed {} for mac {}", addr, neigh.mac);
+                                            // FAILED notifications usually carry no
+                                            // lladdr, so match on the address instead of
+                                            // the MAC bucket.
+                                            if remove_gua_entry(&mut gua_keepalive, *addr) {
+                                                trace!(
+                                                    "GUA keepalive: removed failed {} (mac {:?})",
+                                                    addr,
+                                                    neigh.mac
+                                                );
                                             }
-                                        } else if should_publish_state(neigh.state) {
-                                            if let Some(hostname) = leases.get(&neigh.mac) {
+                                        } else if should_track_gua(neigh.state, &neigh.mac) {
+                                            let confirmed =
+                                                neigh.state == NeighbourState::Reachable;
+                                            let tracked = gua_keepalive
+                                                .get(&neigh.mac)
+                                                .is_some_and(|entries| {
+                                                    entries.iter().any(|e| e.addr == *addr)
+                                                });
+                                            if tracked {
+                                                // Already tracked: refresh ifindex and, on
+                                                // REACHABLE only, the confirmation time.
                                                 upsert_gua_entry(
                                                     &mut gua_keepalive,
                                                     &neigh.mac,
@@ -719,14 +767,26 @@ async fn main() -> anyhow::Result<()> {
                                                     neigh.ifindex,
                                                     Instant::now(),
                                                     keepalive_gua_interval,
+                                                    confirmed,
+                                                );
+                                            } else if let Some(hostname) = leases.get(&neigh.mac)
+                                            {
+                                                // First-time observation may be STALE (e.g. the
+                                                // new-prefix GUA right after a service restart):
+                                                // adopt it so the scheduler installs the lladdr
+                                                // entry before the kernel GC drops it.
+                                                upsert_gua_entry(
+                                                    &mut gua_keepalive,
+                                                    &neigh.mac,
+                                                    *addr,
+                                                    neigh.ifindex,
+                                                    Instant::now(),
+                                                    keepalive_gua_interval,
+                                                    confirmed,
                                                 );
                                                 trace!("GUA keepalive: tracking {} -> {}", hostname, addr);
                                             }
-                                        } else if matches!(neigh.state, NeighbourState::Stale | NeighbourState::Delay | NeighbourState::Probe)
-                                            && let Some(entries) = gua_keepalive.get_mut(&neigh.mac)
-                                                && let Some(e) = entries.iter_mut().find(|e| e.addr == *addr) {
-                                                    e.ifindex = neigh.ifindex;
-                                                }
+                                        }
                                     }
                                     continue;
                                 }
@@ -798,10 +858,15 @@ async fn main() -> anyhow::Result<()> {
 
                             if let NeighbourAddress::Inet6(addr) = &neigh.inet
                                 && is_gua_ipv6(addr) && keepalive_gua {
-                                    if let Some(entries) = gua_keepalive.get_mut(&neigh.mac) {
-                                        entries.retain(|e| e.addr != *addr);
-                                        trace!("GUA keepalive: removed deleted {} for mac {}", addr, neigh.mac);
-                                    }
+                                    // The kernel may delete a neighbour entry right after a
+                                    // probe; the scheduler re-installs it on the next
+                                    // keepalive tick.  FAILED and prune are the removal
+                                    // paths, so do not drop the entry here.
+                                    trace!(
+                                        "GUA keepalive: {} deleted by kernel, will re-install on next keepalive tick (mac {:?})",
+                                        addr,
+                                        neigh.mac
+                                    );
                                     if private_subnet_v6 {
                                         continue;
                                     }
@@ -879,6 +944,19 @@ async fn main() -> anyhow::Result<()> {
                             continue;
                         }
                         if is_failed_state(neigh.state) {
+                            // FAILED entries normally lack a lladdr, so remove the
+                            // GUA keepalive entry by address rather than by MAC.
+                            if let NeighbourAddress::Inet6(addr) = &neigh.inet
+                                && is_gua_ipv6(addr)
+                                && keepalive_gua
+                                && remove_gua_entry(&mut gua_keepalive, *addr)
+                            {
+                                trace!(
+                                    "GUA keepalive: removed failed {} (mac {:?})",
+                                    addr,
+                                    neigh.mac
+                                );
+                            }
                             let ip_str = inet_to_string(&neigh.inet);
                             let key_opt = registered_key_for(&registered, &leases, &neigh.mac, &ip_str);
                             if let Some(key) = key_opt
@@ -890,9 +968,6 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             continue;
                         }
-                        if !should_publish_state(neigh.state) {
-                            continue;
-                        }
                         if let NeighbourAddress::Inet6(addr) = &neigh.inet {
                             if !active_prefixes.is_empty()
                                 && !active_prefixes.iter().any(|p| ipv6_in_prefix(*addr, p))
@@ -900,7 +975,13 @@ async fn main() -> anyhow::Result<()> {
                                 continue;
                             }
                             if is_gua_ipv6(addr) {
-                                if keepalive_gua && leases.contains_key(&neigh.mac) {
+                                // Track every live NUD state, not just REACHABLE:
+                                // a new-prefix GUA may never become REACHABLE again
+                                // once its neighbour entry has been GC'd.
+                                if keepalive_gua
+                                    && should_track_gua(neigh.state, &neigh.mac)
+                                    && leases.contains_key(&neigh.mac)
+                                {
                                     upsert_gua_entry(
                                         &mut gua_keepalive,
                                         &neigh.mac,
@@ -908,12 +989,16 @@ async fn main() -> anyhow::Result<()> {
                                         neigh.ifindex,
                                         Instant::now(),
                                         keepalive_gua_interval,
+                                        neigh.state == NeighbourState::Reachable,
                                     );
                                 }
                                 if private_subnet_v6 {
                                     continue;
                                 }
                             }
+                        }
+                        if !should_publish_state(neigh.state) {
+                            continue;
                         }
                         let ip_str = inet_to_string(&neigh.inet);
                         let Some(hostname) = leases.get(&neigh.mac) else {
@@ -1098,19 +1183,50 @@ mod tests {
         let first: Ipv6Addr = "2001:db8:1:2::1".parse().unwrap();
         let second: Ipv6Addr = "2001:db8:1:2::2".parse().unwrap();
 
-        upsert_gua_entry(&mut map, "aa:bb", first, 2, now, 120);
+        upsert_gua_entry(&mut map, "aa:bb", first, 2, now, 120, true);
         assert_eq!(map["aa:bb"].len(), 1);
         assert_eq!(map["aa:bb"][0].addr, first);
         assert_eq!(map["aa:bb"][0].ifindex, 2);
+        assert_eq!(map["aa:bb"][0].last_confirmed, now);
 
         let later = now + Duration::from_secs(30);
-        upsert_gua_entry(&mut map, "aa:bb", first, 3, later, 120);
+        upsert_gua_entry(&mut map, "aa:bb", first, 3, later, 120, true);
         assert_eq!(map["aa:bb"].len(), 1);
         assert_eq!(map["aa:bb"][0].ifindex, 3);
         assert_eq!(map["aa:bb"][0].last_confirmed, later);
 
-        upsert_gua_entry(&mut map, "aa:bb", second, 4, later, 120);
+        // Unconfirmed refresh (STALE/DELAY/PROBE) updates ifindex only.
+        upsert_gua_entry(&mut map, "aa:bb", first, 4, later, 120, false);
+        assert_eq!(map["aa:bb"][0].ifindex, 4);
+        assert_eq!(map["aa:bb"][0].last_confirmed, later);
+
+        upsert_gua_entry(&mut map, "aa:bb", second, 5, later, 120, true);
         assert_eq!(map["aa:bb"].len(), 2);
         assert_eq!(map["aa:bb"][0].addr, second);
+    }
+
+    #[test]
+    fn remove_gua_entry_matches_by_address_across_buckets() {
+        let mut map = HashMap::new();
+        let now = Instant::now();
+        let first: Ipv6Addr = "2001:db8:1:2::1".parse().unwrap();
+        let second: Ipv6Addr = "2001:db8:1:2::2".parse().unwrap();
+        let other: Ipv6Addr = "2001:db8:1:2::3".parse().unwrap();
+
+        // The same address can sit in more than one bucket after a rename.
+        upsert_gua_entry(&mut map, "aa:bb", first, 2, now, 120, true);
+        upsert_gua_entry(&mut map, "cc:dd", first, 2, now, 120, true);
+        upsert_gua_entry(&mut map, "cc:dd", other, 2, now, 120, true);
+
+        assert!(remove_gua_entry(&mut map, first));
+        assert_eq!(map.keys().count(), 1);
+        assert_eq!(map["cc:dd"].len(), 1);
+        assert_eq!(map["cc:dd"][0].addr, other);
+
+        // A bucket emptied by the removal is dropped.
+        assert!(remove_gua_entry(&mut map, other));
+        assert!(map.is_empty());
+
+        assert!(!remove_gua_entry(&mut map, second));
     }
 }
