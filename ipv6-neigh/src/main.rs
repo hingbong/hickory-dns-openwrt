@@ -207,14 +207,18 @@ fn dedupe_addr_from_other_buckets(
     gua_keepalive: &mut HashMap<String, Vec<GuaKeepaliveEntry>>,
     mac: &str,
     addr: Ipv6Addr,
-) {
+) -> bool {
+    let mut removed = false;
     gua_keepalive.retain(|bucket_mac, entries| {
         if bucket_mac.as_str() == mac {
             return true;
         }
+        let before = entries.len();
         entries.retain(|e| e.addr != addr);
+        removed |= entries.len() != before;
         !entries.is_empty()
     });
+    removed
 }
 
 /// Insert or refresh a GUA keepalive entry (newest first).
@@ -233,7 +237,7 @@ fn upsert_gua_entry(
     interval: u64,
     confirmed: bool,
 ) {
-    dedupe_addr_from_other_buckets(gua_keepalive, mac, addr);
+    let _ = dedupe_addr_from_other_buckets(gua_keepalive, mac, addr);
     let entries = gua_keepalive.entry(mac.to_owned()).or_default();
     if let Some(entry) = entries.iter_mut().find(|e| e.addr == addr) {
         entry.ifindex = ifindex;
@@ -803,16 +807,17 @@ async fn main() -> anyhow::Result<()> {
                                                 // re-installing the stale lladdr over the one the
                                                 // kernel just learned, until prune removes it (up
                                                 // to 600s).  Drop the previous owner's copy.
-                                                dedupe_addr_from_other_buckets(
+                                                if dedupe_addr_from_other_buckets(
                                                     &mut gua_keepalive,
                                                     &neigh.mac,
                                                     *addr,
-                                                );
-                                                trace!(
-                                                    "GUA keepalive: new MAC {} has no lease, dropping stale copies of {} from other buckets",
-                                                    neigh.mac,
-                                                    addr
-                                                );
+                                                ) {
+                                                    trace!(
+                                                        "GUA keepalive: new MAC {} has no lease, dropping stale copies of {} from other buckets",
+                                                        neigh.mac,
+                                                        addr
+                                                    );
+                                                }
                                             }
                                         }
                                     }
