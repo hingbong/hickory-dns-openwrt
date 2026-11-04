@@ -197,6 +197,26 @@ fn initial_next_probe_due(now: Instant, mac: &str, ip: &str, interval: u64) -> I
     now + stable_jitter_offset(mac, ip, interval)
 }
 
+/// Drop `addr` from every bucket except the one owned by `mac`.
+///
+/// A MAC change (or a rename) would otherwise leave the same address in the old
+/// bucket, and both buckets would keep re-installing it with stale lladdrs; the
+/// kernel then sees the address flap between two owners.  Keep exactly one
+/// bucket per address.
+fn dedupe_addr_from_other_buckets(
+    gua_keepalive: &mut HashMap<String, Vec<GuaKeepaliveEntry>>,
+    mac: &str,
+    addr: Ipv6Addr,
+) {
+    gua_keepalive.retain(|bucket_mac, entries| {
+        if bucket_mac.as_str() == mac {
+            return true;
+        }
+        entries.retain(|e| e.addr != addr);
+        !entries.is_empty()
+    });
+}
+
 /// Insert or refresh a GUA keepalive entry (newest first).
 ///
 /// `confirmed` is true only for a kernel REACHABLE notification.  An existing
@@ -213,16 +233,7 @@ fn upsert_gua_entry(
     interval: u64,
     confirmed: bool,
 ) {
-    // A MAC change (or a rename) would otherwise leave the same address in the
-    // old bucket, and both buckets would keep re-installing it with stale
-    // lladdrs.  Keep exactly one bucket per address.
-    gua_keepalive.retain(|bucket_mac, entries| {
-        if bucket_mac.as_str() == mac {
-            return true;
-        }
-        entries.retain(|e| e.addr != addr);
-        !entries.is_empty()
-    });
+    dedupe_addr_from_other_buckets(gua_keepalive, mac, addr);
     let entries = gua_keepalive.entry(mac.to_owned()).or_default();
     if let Some(entry) = entries.iter_mut().find(|e| e.addr == addr) {
         entry.ifindex = ifindex;
@@ -598,10 +609,12 @@ async fn main() -> anyhow::Result<()> {
                         "init dump: GUA keepalive tracked {} -> {} (state {:?})",
                         hostname, addr, neigh.state
                     );
-                } else if matches!(
-                    neigh.state,
-                    NeighbourState::Stale | NeighbourState::Delay | NeighbourState::Probe
-                ) {
+                } else if keepalive_gua
+                    && matches!(
+                        neigh.state,
+                        NeighbourState::Stale | NeighbourState::Delay | NeighbourState::Probe
+                    )
+                {
                     match prober.send_icmpv6_echo(*addr, neigh.ifindex) {
                         Ok(_) => trace!("init dump: probing stale GUA {}", addr),
                         Err(e) => warn!("init GUA probe failed for {}: {}", addr, e),
@@ -784,6 +797,22 @@ async fn main() -> anyhow::Result<()> {
                                                     confirmed,
                                                 );
                                                 trace!("GUA keepalive: tracking {} -> {}", hostname, addr);
+                                            } else {
+                                                // New MAC, no lease yet: the address changed
+                                                // owners, but the old MAC's bucket would keep
+                                                // re-installing the stale lladdr over the one the
+                                                // kernel just learned, until prune removes it (up
+                                                // to 600s).  Drop the previous owner's copy.
+                                                dedupe_addr_from_other_buckets(
+                                                    &mut gua_keepalive,
+                                                    &neigh.mac,
+                                                    *addr,
+                                                );
+                                                trace!(
+                                                    "GUA keepalive: new MAC {} has no lease, dropping stale copies of {} from other buckets",
+                                                    neigh.mac,
+                                                    addr
+                                                );
                                             }
                                         }
                                     }
@@ -1181,8 +1210,10 @@ mod tests {
         assert_eq!(map["aa:bb"][0].ifindex, 3);
         assert_eq!(map["aa:bb"][0].last_confirmed, later);
 
-        // Unconfirmed refresh (STALE/DELAY/PROBE) updates ifindex only.
-        upsert_gua_entry(&mut map, "aa:bb", first, 4, later, 120, false);
+        // Unconfirmed refresh (STALE/DELAY/PROBE) updates ifindex only.  Use a
+        // later timestamp so a wrongly-advanced last_confirmed would be visible.
+        let unconfirmed = later + Duration::from_secs(60);
+        upsert_gua_entry(&mut map, "aa:bb", first, 4, unconfirmed, 120, false);
         assert_eq!(map["aa:bb"][0].ifindex, 4);
         assert_eq!(map["aa:bb"][0].last_confirmed, later);
 
