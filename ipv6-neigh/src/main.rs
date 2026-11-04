@@ -97,9 +97,10 @@ struct Cli {
     /// the neighbour entry with the known MAC and then sends an ICMPv6 echo
     /// (only used with --keepalive-gua)
     ///
-    /// The default must stay below the kernel's net.ipv6.neigh.<if>.gc_stale_time
-    /// (60s by default): a STALE entry that is not refreshed within that window
-    /// is garbage-collected, and the next probe would fall back to a multicast NS.
+    /// Each tick re-installs the neighbour entry with the known MAC, so the interval
+    /// bounds how long an address can stay unresolvable after the kernel drops the
+    /// entry (manual delete, GC, or a FAILED probe) before unicast resolution is
+    /// restored.  30s keeps that window short without measurable traffic.
     #[clap(long, default_value = "30")]
     keepalive_gua_interval: u64,
 
@@ -212,6 +213,16 @@ fn upsert_gua_entry(
     interval: u64,
     confirmed: bool,
 ) {
+    // A MAC change (or a rename) would otherwise leave the same address in the
+    // old bucket, and both buckets would keep re-installing it with stale
+    // lladdrs.  Keep exactly one bucket per address.
+    gua_keepalive.retain(|bucket_mac, entries| {
+        if bucket_mac.as_str() == mac {
+            return true;
+        }
+        entries.retain(|e| e.addr != addr);
+        !entries.is_empty()
+    });
     let entries = gua_keepalive.entry(mac.to_owned()).or_default();
     if let Some(entry) = entries.iter_mut().find(|e| e.addr == addr) {
         entry.ifindex = ifindex;
@@ -230,25 +241,6 @@ fn upsert_gua_entry(
             },
         );
     }
-}
-
-/// Remove a GUA keepalive entry by address, regardless of which MAC bucket
-/// holds it.  FAILED notifications usually arrive without a link-layer address,
-/// so the bucket cannot be located from the event itself.
-///
-/// Returns true when an entry was removed; now-empty buckets are dropped.
-fn remove_gua_entry(
-    gua_keepalive: &mut HashMap<String, Vec<GuaKeepaliveEntry>>,
-    addr: Ipv6Addr,
-) -> bool {
-    let mut removed = false;
-    gua_keepalive.retain(|_, entries| {
-        let before = entries.len();
-        entries.retain(|e| e.addr != addr);
-        removed |= entries.len() != before;
-        !entries.is_empty()
-    });
-    removed
 }
 
 /// Tick an optional interval timer; when `None`, await forever (branch disabled).
@@ -606,6 +598,14 @@ async fn main() -> anyhow::Result<()> {
                         "init dump: GUA keepalive tracked {} -> {} (state {:?})",
                         hostname, addr, neigh.state
                     );
+                } else if matches!(
+                    neigh.state,
+                    NeighbourState::Stale | NeighbourState::Delay | NeighbourState::Probe
+                ) {
+                    match prober.send_icmpv6_echo(*addr, neigh.ifindex) {
+                        Ok(_) => trace!("init dump: probing stale GUA {}", addr),
+                        Err(e) => warn!("init GUA probe failed for {}: {}", addr, e),
+                    }
                 }
                 if private_subnet_v6 {
                     continue;
@@ -739,16 +739,15 @@ async fn main() -> anyhow::Result<()> {
                                 && is_gua_ipv6(addr) && private_subnet_v6 {
                                     if keepalive_gua {
                                         if is_failed_state(neigh.state) {
-                                            // FAILED notifications usually carry no
-                                            // lladdr, so match on the address instead of
-                                            // the MAC bucket.
-                                            if remove_gua_entry(&mut gua_keepalive, *addr) {
-                                                trace!(
-                                                    "GUA keepalive: removed failed {} (mac {:?})",
-                                                    addr,
-                                                    neigh.mac
-                                                );
-                                            }
+                                            // Keep the entry: FAILED here usually means
+                                            // multicast NS went unanswered, which is exactly
+                                            // what the unicast re-install fixes.  Lifetime is
+                                            // bounded by prune_gua_keepalive (last_confirmed
+                                            // only moves on REACHABLE).
+                                            trace!(
+                                                "GUA keepalive: {} FAILED, keeping for unicast re-install",
+                                                addr
+                                            );
                                         } else if should_track_gua(neigh.state, &neigh.mac) {
                                             let confirmed =
                                                 neigh.state == NeighbourState::Reachable;
@@ -944,19 +943,6 @@ async fn main() -> anyhow::Result<()> {
                             continue;
                         }
                         if is_failed_state(neigh.state) {
-                            // FAILED entries normally lack a lladdr, so remove the
-                            // GUA keepalive entry by address rather than by MAC.
-                            if let NeighbourAddress::Inet6(addr) = &neigh.inet
-                                && is_gua_ipv6(addr)
-                                && keepalive_gua
-                                && remove_gua_entry(&mut gua_keepalive, *addr)
-                            {
-                                trace!(
-                                    "GUA keepalive: removed failed {} (mac {:?})",
-                                    addr,
-                                    neigh.mac
-                                );
-                            }
                             let ip_str = inet_to_string(&neigh.inet);
                             let key_opt = registered_key_for(&registered, &leases, &neigh.mac, &ip_str);
                             if let Some(key) = key_opt
@@ -1206,27 +1192,27 @@ mod tests {
     }
 
     #[test]
-    fn remove_gua_entry_matches_by_address_across_buckets() {
+    fn gua_upsert_dedupes_address_across_mac_buckets() {
         let mut map = HashMap::new();
         let now = Instant::now();
-        let first: Ipv6Addr = "2001:db8:1:2::1".parse().unwrap();
-        let second: Ipv6Addr = "2001:db8:1:2::2".parse().unwrap();
-        let other: Ipv6Addr = "2001:db8:1:2::3".parse().unwrap();
+        let addr: Ipv6Addr = "2001:db8:1:2::1".parse().unwrap();
 
-        // The same address can sit in more than one bucket after a rename.
-        upsert_gua_entry(&mut map, "aa:bb", first, 2, now, 120, true);
-        upsert_gua_entry(&mut map, "cc:dd", first, 2, now, 120, true);
-        upsert_gua_entry(&mut map, "cc:dd", other, 2, now, 120, true);
+        // Same address first seen behind one MAC, then reported with a new one
+        // (MAC change / rename): the old bucket must not keep a copy.
+        upsert_gua_entry(&mut map, "aa:bb", addr, 2, now, 120, true);
+        let later = now + Duration::from_secs(30);
+        upsert_gua_entry(&mut map, "cc:dd", addr, 3, later, 120, true);
 
-        assert!(remove_gua_entry(&mut map, first));
         assert_eq!(map.keys().count(), 1);
         assert_eq!(map["cc:dd"].len(), 1);
-        assert_eq!(map["cc:dd"][0].addr, other);
-
-        // A bucket emptied by the removal is dropped.
-        assert!(remove_gua_entry(&mut map, other));
-        assert!(map.is_empty());
-
-        assert!(!remove_gua_entry(&mut map, second));
+        assert_eq!(map["cc:dd"][0].addr, addr);
+        assert_eq!(map["cc:dd"][0].ifindex, 3);
+        assert_eq!(
+            map.values()
+                .flat_map(|entries| entries.iter())
+                .filter(|e| e.addr == addr)
+                .count(),
+            1
+        );
     }
 }
