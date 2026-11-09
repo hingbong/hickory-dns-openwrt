@@ -97,13 +97,13 @@ type = "forward"
 
 [zones.stores.options]
 edns0 = true
-ip_strategy = "Ipv6AndIpv4"
 cache_size = 8192
 use_hosts_file = "Always"
 num_concurrent_reqs = 1
 server_ordering_strategy = "RoundRobin"
 timeout = 2
-attempts = 3
+attempts = 1
+enable_per_name_server_metrics = true
 positive_min_ttl = 60
 negative_min_ttl = 30
 negative_max_ttl = 300
