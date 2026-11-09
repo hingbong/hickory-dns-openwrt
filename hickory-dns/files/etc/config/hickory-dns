@@ -1,0 +1,9 @@
+config hickory-dns 'main'
+	option enabled '1'
+	# netifd interface to take the router's LAN addresses from. Reverse
+	# zones are generated for every IPv4 address found on it.
+	option iface 'lan'
+
+	# Extra reverse zones for subnets that are not on the interface above,
+	# e.g. a second LAN. CIDR notation, /8 /16 /24 boundaries.
+	# list subnet '192.168.1.0/24'
