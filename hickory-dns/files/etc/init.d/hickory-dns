@@ -77,8 +77,8 @@ add_ptr() {
     return 0
 }
 
-# Resolve the configured netifd interface into a device name plus one
-# reverse zone per IPv4 address on it.
+# Resolve the configured netifd interface into the device name that
+# ipv6-neigh publishes the router's own addresses from.
 #
 # hickory-dns is started before netifd, so the interface may not have
 # addresses yet; poll briefly instead of falling back to no reverse zones
@@ -108,17 +108,45 @@ resolve_lan() {
     [ -n "$st" ] || return 1
 
     DEV=$(printf '%s' "$st" | jsonfilter -e '@.l3_device' 2>/dev/null)
+}
 
-    i=0
-    while :; do
-        addr=$(printf '%s' "$st" | jsonfilter -e "@[\"ipv4-address\"][$i].address" 2>/dev/null)
-        [ -n "$addr" ] || break
-        mask=$(printf '%s' "$st" | jsonfilter -e "@[\"ipv4-address\"][$i].mask" 2>/dev/null)
+# One reverse zone per IPv4 address on every interface that is not loopback and
+# does not carry the default route, so a fresh install covers all local
+# networks without listing them in /etc/config/hickory-dns.
+resolve_reverse_zones() {
+    local names name st dev targets addr mask pair i
 
-        pair=$(ipv4_rev "$addr" "$mask")
-        add_ptr "${pair%% *}" "${pair#* }"
+    names=$(ubus call network.interface dump 2>/dev/null | jsonfilter -e '@.interface[*].interface' 2>/dev/null)
+    [ -n "$names" ] || return 0
 
-        i=$((i + 1))
+    for name in $names; do
+        st=$(ubus call "network.interface.$name" status 2>/dev/null)
+        [ -n "$st" ] || continue
+
+        dev=$(printf '%s' "$st" | jsonfilter -e '@.l3_device' 2>/dev/null)
+        [ -n "$dev" ] || continue
+        [ "$dev" = "lo" ] && continue
+
+        # The WAN side carries the default route; its address is not ours to serve.
+        targets=" $(printf '%s' "$st" | jsonfilter -e '@.route[*].target' 2>/dev/null | tr '\n' ' ') "
+        case "$targets" in
+            *" 0.0.0.0 "*) continue ;;
+        esac
+
+        i=0
+        while :; do
+            addr=$(printf '%s' "$st" | jsonfilter -e "@[\"ipv4-address\"][$i].address" 2>/dev/null)
+            [ -n "$addr" ] || break
+            mask=$(printf '%s' "$st" | jsonfilter -e "@[\"ipv4-address\"][$i].mask" 2>/dev/null)
+            case "$addr" in
+                127.*|169.254.*) ;;
+                *)
+                    pair=$(ipv4_rev "$addr" "$mask")
+                    add_ptr "${pair%% *}" "${pair#* }"
+                    ;;
+            esac
+            i=$((i + 1))
+        done
     done
 }
 
@@ -205,6 +233,7 @@ start_service() {
     DEV=
 
     resolve_lan "$iface"
+    resolve_reverse_zones
 
     for sn in $subnets; do
         addr=${sn%%/*}
