@@ -1,0 +1,75 @@
+name: Build both binaries (aarch64)
+
+on:
+  workflow_dispatch:
+
+# One job, one target dir and one RUSTFLAGS: hickory-dns is built first and
+# ipv6-neigh right after it in the same directory, so dependency units that
+# match (same version, features, profile and flags) are reused instead of
+# being compiled twice.
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+  RUSTFLAGS: "-C target-cpu=cortex-a53 -C target-feature=+crc,+aes,+sha2"
+
+jobs:
+  build:
+    name: Build hickory-dns and ipv6-neigh
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross
+        run: |
+          curl -fsSL https://github.com/cross-rs/cross/releases/latest/download/cross-x86_64-unknown-linux-gnu.tar.gz \
+            | sudo tar xz -C /usr/local/bin
+
+      - name: Extract hickory-dns commit from Makefile
+        id: hickory
+        run: |
+          commit=$(grep '^HICKORY_COMMIT:=' hickory-dns/Makefile | cut -d= -f2)
+          features=$(grep '^RUST_PKG_FEATURES:=' hickory-dns/Makefile | cut -d= -f2)
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "features=$features" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout hickory-dns source
+        uses: actions/checkout@v4
+        with:
+          repository: hickory-dns/hickory-dns
+          ref: ${{ steps.hickory.outputs.commit }}
+          path: hickory-dns-src
+
+      - name: Build hickory-dns for aarch64
+        working-directory: hickory-dns-src
+        run: |
+          cross build --release --target aarch64-unknown-linux-musl \
+            --bin hickory-dns \
+            --features "${{ steps.hickory.outputs.features }}" \
+            --no-default-features
+
+      - name: Build ipv6-neigh for aarch64
+        working-directory: ipv6-neigh
+        run: |
+          cross build --release --target aarch64-unknown-linux-musl
+
+      - name: Check binaries
+        run: |
+          file target/aarch64-unknown-linux-musl/release/hickory-dns \
+               target/aarch64-unknown-linux-musl/release/ipv6-neigh
+          ls -lh target/aarch64-unknown-linux-musl/release/hickory-dns \
+                 target/aarch64-unknown-linux-musl/release/ipv6-neigh
+
+      - name: Upload hickory-dns artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hickory-dns-aarch64
+          path: target/aarch64-unknown-linux-musl/release/hickory-dns
+
+      - name: Upload ipv6-neigh artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipv6-neigh-aarch64
+          path: target/aarch64-unknown-linux-musl/release/ipv6-neigh
